@@ -5,20 +5,25 @@ package provider
 
 import (
 	"context"
-	"net/http"
+	"fmt"
+	"io/ioutil"
+	"os"
 
+	"github.com/aidanleuck/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Ensure ScaffoldingProvider satisfies various provider interfaces.
-var _ provider.Provider = &ScaffoldingProvider{}
+// Ensure JenkinsProvider satisfies various provider interfaces.
+var _ provider.Provider = &JenkinsProvider{}
 
-// ScaffoldingProvider defines the provider implementation.
-type ScaffoldingProvider struct {
+// JenkinsProvider defines the provider implementation.
+type JenkinsProvider struct {
 	// version is set to the provider version on release, "dev" when the
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
@@ -26,59 +31,121 @@ type ScaffoldingProvider struct {
 }
 
 // ScaffoldingProviderModel describes the provider data model.
-type ScaffoldingProviderModel struct {
-	Endpoint types.String `tfsdk:"endpoint"`
+type JenkinsProviderModel struct {
+	Url      types.String `tfsdk:"url"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+	CACert   types.String `tfsdk:"ca_cert"`
 }
 
-func (p *ScaffoldingProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "scaffolding"
+func (p *JenkinsProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "jenkins-provider"
 	resp.Version = p.version
 }
 
-func (p *ScaffoldingProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *JenkinsProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
-			"endpoint": schema.StringAttribute{
-				MarkdownDescription: "Example provider attribute",
+			"url": schema.StringAttribute{
+				MarkdownDescription: "URL to the Jenkins Server to configure",
+				Required:            true,
+			},
+			"username": schema.StringAttribute{
+				MarkdownDescription: "Username to authenticate to the Jenkins Server",
 				Optional:            true,
+				Sensitive:           true,
+			},
+			"password": schema.StringAttribute{
+				MarkdownDescription: "Password to authenticate to the Jenkins Server",
+				Optional:            true,
+				Sensitive:           true,
+			},
+			"ca_cert": schema.StringAttribute{
+				MarkdownDescription: "CA certificate to use if you are authenticating with a server that is using a self signed cert.",
+				Optional:            true,
+				Sensitive:           true,
 			},
 		},
 	}
 }
 
-func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var data ScaffoldingProviderModel
+func (p *JenkinsProvider) ValidateConfig(ctx context.Context, req provider.ValidateConfigRequest, resp *provider.ValidateConfigResponse) {
+	var data JenkinsProviderModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
+	// return if there are errors.
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
-
-	// Example client configuration for data sources and resources
-	client := http.DefaultClient
-	resp.DataSourceData = client
-	resp.ResourceData = client
-}
-
-func (p *ScaffoldingProvider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{
-		NewExampleResource,
+	// Validate CACert is valid.
+	if !data.CACert.IsNull() {
+		_, err := os.Stat(data.CACert.ValueString())
+		if err != nil {
+			errMessage := fmt.Sprintf("%s%s%s", "path", data.CACert.ValueString(), "doesn't exist")
+			resp.Diagnostics.AddAttributeError(path.Root("ca_cert"), errMessage, errMessage)
+		}
 	}
 }
 
-func (p *ScaffoldingProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data JenkinsProviderModel
+
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+
+	// Return if there was an error parsing the provider schema
+	// Plugin SDK handles errors
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	jenkinsServer := gojenkins.CreateJenkins(nil, data.Url.ValueString(), data.Username.ValueString(), data.Password.ValueString())
+
+	// Configure ca cert to communicate with Jenkins
+	if !data.CACert.IsNull() {
+		cacert, err := ioutil.ReadFile(data.CACert.ValueString())
+		if err != nil {
+			errMessage := fmt.Sprintf("%s%s", "failed to read provided ca cert at path", data.CACert.ValueString())
+			tflog.Error(ctx, errMessage)
+			resp.Diagnostics.AddError(errMessage, err.Error())
+			return
+		}
+
+		jenkinsServer.Requester.CACert = cacert
+	}
+	client, err := jenkinsServer.Init(ctx)
+
+	// Return to prevent a panic.
+	if err != nil {
+		errMessage := "failed to communicate with jenkins"
+		resp.Diagnostics.AddError(errMessage, err.Error())
+		tflog.Error(ctx, errMessage)
+		return
+	}
+
+	tflog.Info(ctx, "Connected to Jenkins!")
+
+	// Use the jenkins client for resources and data sources!
+	resp.ResourceData = client
+	resp.DataSourceData = client
+}
+
+func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resource {
+	return []func() resource.Resource{
+		NewNodeResource,
+	}
+}
+
+func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewExampleDataSource,
+		NewNodeDataSource,
 	}
 }
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &ScaffoldingProvider{
+		return &JenkinsProvider{
 			version: version,
 		}
 	}
