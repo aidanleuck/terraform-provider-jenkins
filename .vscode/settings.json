@@ -1,0 +1,7 @@
+{
+    "go.testEnvVars": {
+        "TF_ACC": "1",
+        "JENKINS_PROVIDER_USERNAME": "",
+        "JENKINS_PROVIDER_PASSWORD": ""
+    }
+}

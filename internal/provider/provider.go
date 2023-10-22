@@ -22,6 +22,11 @@ import (
 // Ensure JenkinsProvider satisfies various provider interfaces.
 var _ provider.Provider = &JenkinsProvider{}
 
+const (
+	JENKINS_USERNAME_ENV_KEY string = "JENKINS_PROVIDER_USERNAME"
+	JENKINS_PASSWORD_ENV_KEY string = "JENKINS_PROVIDER_PASSWORD"
+)
+
 // JenkinsProvider defines the provider implementation.
 type JenkinsProvider struct {
 	// version is set to the provider version on release, "dev" when the
@@ -69,6 +74,32 @@ func (p *JenkinsProvider) Schema(ctx context.Context, req provider.SchemaRequest
 	}
 }
 
+func (p *JenkinsProviderModel) getUsername() (string, error) {
+	if !p.Username.IsNull() {
+		return p.Username.ValueString(), nil
+	}
+
+	username, ok := os.LookupEnv(JENKINS_USERNAME_ENV_KEY)
+	if !ok {
+		return "", fmt.Errorf("username is required, set environment variable %s or the username field under provider", JENKINS_USERNAME_ENV_KEY)
+	}
+
+	return username, nil
+}
+
+func (p *JenkinsProviderModel) getPassword() (string, error) {
+	if !p.Password.IsNull() {
+		return p.Password.ValueString(), nil
+	}
+
+	password, ok := os.LookupEnv(JENKINS_PASSWORD_ENV_KEY)
+	if !ok {
+		return "", fmt.Errorf("password is required, set environment variable %s or the username field under provider", JENKINS_PASSWORD_ENV_KEY)
+	}
+
+	return password, nil
+}
+
 func (p *JenkinsProvider) ValidateConfig(ctx context.Context, req provider.ValidateConfigRequest, resp *provider.ValidateConfigResponse) {
 	var data JenkinsProviderModel
 
@@ -88,6 +119,17 @@ func (p *JenkinsProvider) ValidateConfig(ctx context.Context, req provider.Valid
 			return
 		}
 	}
+
+	// Make sure user has valid username and password
+	if _, err := data.getPassword(); err != nil {
+		resp.Diagnostics.AddError("failed getting password", err.Error())
+		return
+	}
+
+	if _, err := data.getUsername(); err != nil {
+		resp.Diagnostics.AddError("failed getting username", err.Error())
+		return
+	}
 }
 
 func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
@@ -101,7 +143,20 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	jenkinsServer := gojenkins.CreateJenkins(nil, data.Url.ValueString(), data.Username.ValueString(), data.Password.ValueString())
+	// Make sure user has valid username and password
+	password, err := data.getPassword()
+	if err != nil {
+		resp.Diagnostics.AddError("failed getting password", err.Error())
+		return
+	}
+
+	username, err := data.getUsername()
+	if err != nil {
+		resp.Diagnostics.AddError("failed getting username", err.Error())
+		return
+	}
+
+	jenkinsServer := gojenkins.CreateJenkins(nil, data.Url.ValueString(), username, password)
 
 	// Configure ca cert to communicate with Jenkins
 	if !data.CACert.IsNull() {
@@ -115,6 +170,7 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 		jenkinsServer.Requester.CACert = cacert
 	}
+
 	client, err := jenkinsServer.Init(ctx)
 
 	// Return to prevent a panic.

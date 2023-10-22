@@ -45,14 +45,6 @@ type JNLPOptions struct {
 	RemoteDir            types.String `tfsdk:"remoting_dir"`
 }
 
-func (j *JNLPOptions) UnmarshalJNLPOptions(ctx context.Context, l *LauncherConfiguration) diag.Diagnostics {
-	return l.JNLPOptions.As(ctx, j, basetypes.ObjectAsOptions{})
-}
-
-func (j *JNLPOptions) MarshalJNLPOptions(ctx context.Context, l *LauncherConfiguration) (types.Object, diag.Diagnostics) {
-	return types.ObjectValueFrom(ctx, getJNLPAttributes(), j)
-}
-
 // SSH Options maps the ssh_option terraform schema to its go types.
 type SSHOptions struct {
 	Host                 types.String `tfsdk:"host"`
@@ -67,18 +59,10 @@ type SSHOptions struct {
 	SuffixStartSlaveCmd  types.String `tfsdk:"suffix_start_slave_cmd"`
 }
 
-func (s *SSHOptions) UnmarshalSSHOptions(ctx context.Context, l *LauncherConfiguration) diag.Diagnostics {
-	return l.SSHOptions.As(ctx, s, basetypes.ObjectAsOptions{})
-}
-
-func (s *SSHOptions) MarshalSSHOptions(ctx context.Context) (types.Object, diag.Diagnostics) {
-	return types.ObjectValueFrom(ctx, getSSHAttributes(), s)
-}
-
 // Launcher configuration maps launcher_configuration to its go type.
 type LauncherConfiguration struct {
 	JNLPOptions types.Object `tfsdk:"jnlp_options"`
-	Type        types.String `tfsdk:"launch_type"`
+	Type        types.String `tfsdk:"type"`
 	SSHOptions  types.Object `tfsdk:"ssh_options"`
 }
 
@@ -141,7 +125,7 @@ func (r *NodeResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 			"launcher_configuration": schema.SingleNestedAttribute{
 				MarkdownDescription: "Defines launcher options for the node.",
 				Attributes: map[string]schema.Attribute{
-					"launch_type": schema.StringAttribute{
+					"type": schema.StringAttribute{
 						Required:            true,
 						MarkdownDescription: "Type of launcher to connect to. Should be ssh or jnlp",
 					},
@@ -304,10 +288,15 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	executors := 1
+	if !data.NumExecutors.IsNull() {
+		executors = int(data.NumExecutors.ValueInt64())
+	}
+
 	// Create the node.
 	node, err := r.client.CreateNode(ctx,
 		data.Name.ValueString(),
-		int(data.NumExecutors.ValueInt64()),
+		executors,
 		data.Description.ValueString(),
 		data.RemoteFS.ValueString(),
 		labels,
@@ -333,8 +322,10 @@ func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins
 		return err
 	}
 
-	if err = r.ConvertLabelsList(ctx, nodeConfiguration.Label); err != nil {
-		return err
+	if !r.Labels.IsNull() {
+		if err = r.ConvertLabelsList(ctx, nodeConfiguration.Label); err != nil {
+			return err
+		}
 	}
 
 	if !r.Description.IsNull() {
@@ -537,10 +528,15 @@ func (r *NodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	executors := 1
+	if !data.NumExecutors.IsNull() {
+		executors = int(data.NumExecutors.ValueInt64())
+	}
+
 	// Send a request to Jenkins to update the node
 	newNode, err := node.UpdateNode(ctx,
 		data.Name.ValueString(),
-		int(data.NumExecutors.ValueInt64()),
+		executors,
 		data.Description.ValueString(),
 		data.RemoteFS.ValueString(),
 		labels,

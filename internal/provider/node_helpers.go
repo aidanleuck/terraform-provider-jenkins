@@ -27,9 +27,8 @@ func (n *NodeResourceModel) createJNLPLauncher(ctx context.Context, lc *Launcher
 
 	// Convert the launcher configuration from a Terraform object.
 	var jnlpLauncherOptions JNLPOptions
-	diags := n.UnmarshalLauncherConfiguration(ctx, lc)
-	if diags.HasError() {
-		return nil, errors.New("failed to unmarshal launcher configuration")
+	if diags := lc.JNLPOptions.As(ctx, &jnlpLauncherOptions, basetypes.ObjectAsOptions{}); diags.HasError() {
+		return nil, errors.New("failed to unmarshal jnlp launcher")
 	}
 
 	// Get the data provided by Terraform and set the launcher configuration based off that data.
@@ -210,7 +209,7 @@ func getJNLPAttributes() map[string]attr.Type {
 // Returns the launcher attribute map.
 func getLauncherAttributes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"launch_type":  types.StringType,
+		"type":         types.StringType,
 		"ssh_options":  types.ObjectType{AttrTypes: getSSHAttributes()},
 		"jnlp_options": types.ObjectType{AttrTypes: getJNLPAttributes()},
 	}
@@ -265,6 +264,7 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave) (*types.Object, error)
 
 		// Set the launcher configuration with JNLP options field, ssh options will be null.
 		launcherConfiguration.JNLPOptions = jnlpTfObject
+		launcherConfiguration.Type = types.StringValue(JNLPLauncherType)
 		launcherConfiguration.SSHOptions = types.ObjectNull(getSSHAttributes())
 	case *gojenkins.SSHLauncher:
 		// Create the SSH options Terraform struct based off rest api call.
@@ -289,6 +289,7 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave) (*types.Object, error)
 
 		// Set the JNLP options to null, and set the ssh terraform object.
 		launcherConfiguration.JNLPOptions = types.ObjectNull(getJNLPAttributes())
+		launcherConfiguration.Type = types.StringValue(SSHLauncherType)
 		launcherConfiguration.SSHOptions = sshTfObject
 	default:
 		return nil, errors.New("unsupported launcher type, must be ssh or jnlp")
