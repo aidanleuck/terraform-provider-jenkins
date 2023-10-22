@@ -85,6 +85,7 @@ func (p *JenkinsProvider) ValidateConfig(ctx context.Context, req provider.Valid
 		if err != nil {
 			errMessage := fmt.Sprintf("%s%s%s", "path", data.CACert.ValueString(), "doesn't exist")
 			resp.Diagnostics.AddAttributeError(path.Root("ca_cert"), errMessage, errMessage)
+			return
 		}
 	}
 }

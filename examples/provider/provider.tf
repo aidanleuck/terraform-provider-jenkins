@@ -18,10 +18,7 @@ resource "jenkins-provider_node" "jenkins-node" {
   labels = ["hello", "judith"]
   description = "Long har stinky dicks are yummmmy"
   launcher_configuration = {
-     launch_type = "jnlp"
-     jnlp_options = {
-      use_web_socket = false
-     }
+     launch_type = "ssh"
   }
 }
 

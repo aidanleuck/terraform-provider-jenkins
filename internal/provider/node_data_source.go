@@ -133,8 +133,9 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	}
 
 	// Get the JNLP secret if applicable.
-	retrievedSecret, diags := GetJNLPSecretTF(ctx, node, resp.Diagnostics)
-	if diags.HasError() {
+	retrievedSecret, err := GetJNLPSecretTF(ctx, node)
+	if err != nil {
+		resp.Diagnostics.AddError("failed retrieving terraform secret", err.Error())
 		return
 	}
 
@@ -143,8 +144,9 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.NumExecutors = types.Int64Value(int64(slaveConfig.NumExecutors))
 	data.Description = types.StringValue(slaveConfig.Description)
 
-	labelsList, diag := convertLabelsList(ctx, slaveConfig.Label)
-	if diag.HasError() {
+	labelsList, err := convertLabelList(ctx, slaveConfig.Label)
+	if err != nil {
+		resp.Diagnostics.AddError("failed converting labels to terraform list", err.Error())
 		return
 	}
 
@@ -154,8 +156,9 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.RemoteFS = types.StringValue(slaveConfig.RemoteFS)
 
 	// Parse custom launcher information specific to the launcher plugin (SSH or JNLP configuration)
-	launcher, diags := GetLauncher(ctx, slaveConfig, resp.Diagnostics)
-	if diags.HasError() {
+	launcher, err := GetLauncher(ctx, slaveConfig)
+	if err != nil {
+		resp.Diagnostics.AddError("failed retrieving launcher from Jenkins", err.Error())
 		return
 	}
 

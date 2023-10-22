@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -219,14 +220,14 @@ func (r *NodeResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 	}
 }
 
-func (r *NodeResourceModel) UpdateComputedResources(ctx context.Context, n *gojenkins.Node, d diag.Diagnostics) diag.Diagnostics {
-	tfSecret, diags := GetJNLPSecretTF(ctx, n, d)
-	if diags.HasError() {
-		return diags
+func (r *NodeResourceModel) UpdateComputedResources(ctx context.Context, n *gojenkins.Node) error {
+	tfSecret, err := GetJNLPSecretTF(ctx, n)
+	if err != nil {
+		return err
 	}
 
 	r.JNLPSecret = tfSecret
-	return d
+	return nil
 }
 
 // ValidateConfig adds custom validation to the schema. We use this to throw an error if both jnlp_options and ssh_options is set at one time.
@@ -291,13 +292,15 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	jenkinsLauncher, diags := data.CreateLauncher(ctx, resp.Diagnostics)
-	if diags.HasError() {
+	jenkinsLauncher, err := data.CreateLauncher(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to create launcher", err.Error())
 		return
 	}
 
-	labels, diags := data.ConvertLabelsStr(ctx)
-	if diags.HasError() {
+	labels, err := data.ConvertLabelsStr(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to convert labels to string", err.Error())
 		return
 	}
 
@@ -315,8 +318,8 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	diags = data.UpdateComputedResources(ctx, node, resp.Diagnostics)
-	if diags.HasError() {
+	if err = data.UpdateComputedResources(ctx, node); err != nil {
+		resp.Diagnostics.AddError("failed updating computed resources", err.Error())
 		return
 	}
 
@@ -324,34 +327,144 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins.Node, d diag.Diagnostics) diag.Diagnostics {
+func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins.Node) error {
 	nodeConfiguration, err := n.GetLauncherConfig(ctx)
 	if err != nil {
-		d.AddError("failed to retrieve node launcher config", err.Error())
-		return d
+		return err
 	}
 
-	diags := r.ConvertLabelsList(ctx, nodeConfiguration.Label)
-	if diags.HasError() {
-		return diags
+	if err = r.ConvertLabelsList(ctx, nodeConfiguration.Label); err != nil {
+		return err
 	}
 
-	r.Description = types.StringValue(nodeConfiguration.Description)
+	if !r.Description.IsNull() {
+		r.Description = types.StringValue(nodeConfiguration.Description)
+	}
+
+	if !r.NumExecutors.IsNull() {
+		r.NumExecutors = types.Int64Value(int64(nodeConfiguration.NumExecutors))
+	}
+
 	r.Name = types.StringValue(nodeConfiguration.Name)
-	r.NumExecutors = types.Int64Value(int64(nodeConfiguration.NumExecutors))
 	r.RemoteFS = types.StringValue(nodeConfiguration.RemoteFS)
 
-	r.mergeLauncherConfiguration(nodeConfiguration.Launcher.Launcher, diags)
-
-	return d
-}
-
-func (r *NodeResourceModel) mergeLauncherConfiguration(currentConfig gojenkins.Launcher, d diag.Diagnostics) diag.Diagnostics {
-	switch l := currentConfig.(type) {
-	case *gojenkins.JNLPLauncher:
-
+	if err = r.mergeLauncherConfiguration(ctx, nodeConfiguration.Launcher.Launcher); err != nil {
+		return err
 	}
 
+	return nil
+}
+
+func (r *NodeResourceModel) mergeLauncherConfiguration(ctx context.Context, currentConfig gojenkins.Launcher) error {
+	var tfLauncherConfiguration LauncherConfiguration
+
+	// If there are no user defined launcher configurations, abort
+	if r.LauncherConfiguration.IsNull() {
+		return nil
+	}
+
+	diags := r.LauncherConfiguration.As(ctx, &tfLauncherConfiguration, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return errors.New("failed converting launcher configuration")
+	}
+	switch l := currentConfig.(type) {
+	case *gojenkins.JNLPLauncher:
+		tfLauncherConfiguration.SSHOptions = types.ObjectNull(getSSHAttributes())
+		tfLauncherConfiguration.Type = types.StringValue(JNLPLauncherType)
+		if tfLauncherConfiguration.JNLPOptions.IsNull() || tfLauncherConfiguration.JNLPOptions.IsUnknown() {
+			tfLauncherConfiguration.JNLPOptions = types.ObjectNull(getJNLPAttributes())
+			break
+		}
+		var currentJnlpConfig JNLPOptions
+		diags = tfLauncherConfiguration.JNLPOptions.As(ctx, &currentJnlpConfig, basetypes.ObjectAsOptions{})
+		if diags.HasError() {
+			return errors.New("failed converting jnlp options")
+		}
+
+		if !currentJnlpConfig.FailIfWorkDirMissing.IsNull() {
+			currentJnlpConfig.FailIfWorkDirMissing = types.BoolValue(l.WorkDirSettings.FailIfWorkDirIsMissing)
+		}
+		if !currentJnlpConfig.RemoteDir.IsNull() {
+			currentJnlpConfig.RemoteDir = types.StringValue(l.WorkDirSettings.InternalDir)
+		}
+		if !currentJnlpConfig.WebSocket.IsNull() {
+			currentJnlpConfig.WebSocket = types.BoolValue(l.WebSocket)
+		}
+		if !currentJnlpConfig.WorkDirDisabled.IsNull() {
+			currentJnlpConfig.WorkDirDisabled = types.BoolValue(l.WorkDirSettings.Disabled)
+		}
+
+		jnlpObject, diags := types.ObjectValueFrom(ctx, getJNLPAttributes(), &currentJnlpConfig)
+		if diags.HasError() {
+			return errors.New("failed converting from jnlp struct to object")
+		}
+
+		tfLauncherConfiguration.JNLPOptions = jnlpObject
+	case *gojenkins.SSHLauncher:
+		tfLauncherConfiguration.JNLPOptions = types.ObjectNull(getJNLPAttributes())
+		tfLauncherConfiguration.Type = types.StringValue(SSHLauncherType)
+		var currentSSHLauncher SSHOptions
+		// If we don't know about an ssh launcher we don't need to continue
+		if tfLauncherConfiguration.SSHOptions.IsNull() || tfLauncherConfiguration.SSHOptions.IsUnknown() {
+			tfLauncherConfiguration.SSHOptions = types.ObjectNull(getSSHAttributes())
+			break
+		}
+
+		diags := tfLauncherConfiguration.SSHOptions.As(ctx, &currentSSHLauncher, basetypes.ObjectAsOptions{})
+		if diags.HasError() {
+			return errors.New("failed converting ssh launcher to terraform object")
+		}
+
+		if !currentSSHLauncher.CredentialsID.IsNull() {
+			currentSSHLauncher.CredentialsID = types.StringValue(l.CredentialsId)
+		}
+		if !currentSSHLauncher.Host.IsNull() {
+			currentSSHLauncher.Host = types.StringValue(l.Host)
+		}
+		if !currentSSHLauncher.JavaPath.IsNull() {
+			currentSSHLauncher.JavaPath = types.StringValue(l.JavaPath)
+		}
+		if !currentSSHLauncher.JvmOptions.IsNull() {
+			currentSSHLauncher.JvmOptions = types.StringValue(l.JvmOptions)
+		}
+		if !currentSSHLauncher.LaunchTimeoutSeconds.IsNull() {
+			currentSSHLauncher.LaunchTimeoutSeconds = types.Int64Value(int64(l.LaunchTimeoutSeconds))
+		}
+		if !currentSSHLauncher.MaxNumRetries.IsNull() {
+			currentSSHLauncher.MaxNumRetries = types.Int64Value(int64(l.MaxNumRetries))
+		}
+		if !currentSSHLauncher.Port.IsNull() {
+			currentSSHLauncher.Port = types.Int64Value(int64(l.Port))
+		}
+		if !currentSSHLauncher.PrefixStartSlaveCmd.IsNull() {
+			currentSSHLauncher.PrefixStartSlaveCmd = types.StringValue(l.PrefixStartSlaveCmd)
+		}
+		if !currentSSHLauncher.RetryWaitTime.IsNull() {
+			currentSSHLauncher.RetryWaitTime = types.Int64Value(int64(l.RetryWaitTime))
+		}
+		if !currentSSHLauncher.SuffixStartSlaveCmd.IsNull() {
+			currentSSHLauncher.SuffixStartSlaveCmd = types.StringValue(l.SuffixStartSlaveCmd)
+		}
+
+		sshObject, diags := types.ObjectValueFrom(ctx, getSSHAttributes(), &currentSSHLauncher)
+		if diags.HasError() {
+			return errors.New("failed converting from ssh struct to object")
+		}
+
+		tfLauncherConfiguration.SSHOptions = sshObject
+
+	default:
+		return errors.New("unsupported launcher type. must be ssh or jnlp launcher")
+
+	}
+	launcherObject, diags := types.ObjectValueFrom(ctx, getLauncherAttributes(), &tfLauncherConfiguration)
+	if diags.HasError() {
+		return errors.New("failed converting launcher to terraform object")
+	}
+
+	r.LauncherConfiguration = launcherObject
+
+	return nil
 }
 
 // Read reads the state from Jenkins and attempts to synchronize it.
@@ -360,7 +473,6 @@ func (r *NodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -373,10 +485,13 @@ func (r *NodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	data.MergeConfiguration(ctx, node, resp.Diagnostics)
+	if err := data.MergeConfiguration(ctx, node); err != nil {
+		resp.Diagnostics.AddError("failed merging configuration", err.Error())
+		return
+	}
 
-	diags := data.UpdateComputedResources(ctx, node, resp.Diagnostics)
-	if diags.HasError() {
+	if err := data.UpdateComputedResources(ctx, node); err != nil {
+		resp.Diagnostics.AddError("failed updating computed resources", err.Error())
 		return
 	}
 
@@ -409,14 +524,16 @@ func (r *NodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// Generate the new launcher configuration
-	jenkinsLauncher, diags := data.CreateLauncher(ctx, resp.Diagnostics)
-	if diags.HasError() {
+	jenkinsLauncher, err := data.CreateLauncher(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed creating launcher when updating launcher", err.Error())
 		return
 	}
 
 	// Get the labels from user configuration
-	labels, diags := data.ConvertLabelsStr(ctx)
-	if diags.HasError() {
+	labels, err := data.ConvertLabelsStr(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed converting label to string", err.Error())
 		return
 	}
 
@@ -435,8 +552,8 @@ func (r *NodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// Update the computer resources
-	diags = data.UpdateComputedResources(ctx, newNode, resp.Diagnostics)
-	if diags.HasError() {
+	if err = data.UpdateComputedResources(ctx, newNode); err != nil {
+		resp.Diagnostics.AddError("failed updating computed resources", err.Error())
 		return
 	}
 

@@ -11,12 +11,11 @@ import (
 
 	"github.com/aidanleuck/gojenkins"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
-func (n *NodeResourceModel) createJNLPLauncher(ctx context.Context, lc *LauncherConfiguration, d diag.Diagnostics) (*gojenkins.JNLPLauncher, diag.Diagnostics) {
+func (n *NodeResourceModel) createJNLPLauncher(ctx context.Context, lc *LauncherConfiguration) (*gojenkins.JNLPLauncher, error) {
 	// Given the case we got a JNLP launch type we first initialize the default launcher.
 	defaultLauncher := gojenkins.DefaultJNLPLauncher()
 
@@ -30,7 +29,7 @@ func (n *NodeResourceModel) createJNLPLauncher(ctx context.Context, lc *Launcher
 	var jnlpLauncherOptions JNLPOptions
 	diags := n.UnmarshalLauncherConfiguration(ctx, lc)
 	if diags.HasError() {
-		return nil, diags
+		return nil, errors.New("failed to unmarshal launcher configuration")
 	}
 
 	// Get the data provided by Terraform and set the launcher configuration based off that data.
@@ -47,10 +46,10 @@ func (n *NodeResourceModel) createJNLPLauncher(ctx context.Context, lc *Launcher
 		defaultLauncher.WorkDirSettings.Disabled = jnlpLauncherOptions.WorkDirDisabled.ValueBool()
 	}
 
-	return defaultLauncher, d
+	return defaultLauncher, nil
 }
 
-func (n *NodeResourceModel) createSSHLauncher(ctx context.Context, lc *LauncherConfiguration, d diag.Diagnostics) (*gojenkins.SSHLauncher, diag.Diagnostics) {
+func (n *NodeResourceModel) createSSHLauncher(ctx context.Context, lc *LauncherConfiguration) (*gojenkins.SSHLauncher, error) {
 	// Given the case the user wants to create a SSH node, initialize a default launcher with Jenkins defaults
 	defaultSSHLauncher := gojenkins.DefaultSSHLauncher()
 
@@ -63,7 +62,7 @@ func (n *NodeResourceModel) createSSHLauncher(ctx context.Context, lc *LauncherC
 	var sshOptionConfig SSHOptions
 	diags := lc.SSHOptions.As(ctx, &sshOptionConfig, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
-		return nil, diags
+		return nil, errors.New("failed to unmarshal ssh options")
 	}
 
 	// Host is a required field when using ssh_options
@@ -102,42 +101,37 @@ func (n *NodeResourceModel) createSSHLauncher(ctx context.Context, lc *LauncherC
 }
 
 // CreateLauncher creates the appropriate launcher based off user input from Terraform.
-func (n *NodeResourceModel) CreateLauncher(ctx context.Context, d diag.Diagnostics) (gojenkins.Launcher, diag.Diagnostics) {
+func (n *NodeResourceModel) CreateLauncher(ctx context.Context) (gojenkins.Launcher, error) {
 	var launcherConfig LauncherConfiguration
 	diags := n.LauncherConfiguration.As(ctx, &launcherConfig, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
-		return nil, diags
+		return nil, errors.New("failed to unmarshal launcher to struct")
 	}
 
 	// Based off whether user input was JNLP or SSH return the appropriate launcher data.
 	switch strings.ToLower(launcherConfig.Type.ValueString()) {
 	case JNLPLauncherType:
-		jnlpLauncher, diags := n.createJNLPLauncher(ctx, &launcherConfig, d)
-		if diags.HasError() {
-			return nil, diags
+		jnlpLauncher, err := n.createJNLPLauncher(ctx, &launcherConfig)
+		if err != nil {
+			return nil, err
 		}
-		return jnlpLauncher, d
+		return jnlpLauncher, nil
 
 	// User wants an SSH node.
 	case SSHLauncherType:
-		sshLauncher, diags := n.createSSHLauncher(ctx, &launcherConfig, d)
-		if diags.HasError() {
-			return nil, diags
+		sshLauncher, err := n.createSSHLauncher(ctx, &launcherConfig)
+		if err != nil {
+			return nil, err
 		}
 
-		return sshLauncher, d
+		return sshLauncher, nil
 	default:
-		d.AddError("unsupported launcher type", "launcher type must be ssh or jnlp")
-		return nil, d
+		return nil, errors.New("unsupported launcher type. must be ssh or jnlp")
 	}
 }
 
-func (n *NodeResourceModel) MergeJenkinsConfiguration(ctx context.Context, d diag.Diagnostics) {
-
-}
-
 // convertLabelsStr takes the Terraform labels list and converts it to a string separated string.
-func (n *NodeResourceModel) ConvertLabelsStr(ctx context.Context) (string, diag.Diagnostics) {
+func (n *NodeResourceModel) ConvertLabelsStr(ctx context.Context) (string, error) {
 	// By default labels will just be an empty slice
 	defaultLabel := []string{}
 	var labelElements []string
@@ -155,44 +149,52 @@ func (n *NodeResourceModel) ConvertLabelsStr(ctx context.Context) (string, diag.
 
 	// Error will get reported back to user abort mission.
 	if diags.HasError() {
-		return "", diags
+		return "", errors.New("failed to convert terraform label list to string")
 	}
 
 	// Join the string and return
 	labelStr := strings.Join(labelElements, " ")
-	return labelStr, diags
+	return labelStr, nil
 }
 
 // Converts labels from a string to a Terraform list type.
-func (n *NodeResourceModel) ConvertLabelsList(ctx context.Context, labels string) diag.Diagnostics {
+func (n *NodeResourceModel) ConvertLabelsList(ctx context.Context, labels string) error {
+	labelsList, err := convertLabelList(ctx, labels)
+	if err != nil {
+		return err
+	}
+	n.Labels = labelsList
+	return nil
+}
+
+func convertLabelList(ctx context.Context, labels string) (types.List, error) {
 	// Convert labels from space separated string to a slice.
 	labelsString := strings.Split(labels, " ")
 	labelsList, diag := types.ListValueFrom(ctx, types.StringType, labelsString)
 	if diag.HasError() {
-		return diag
+		return types.ListNull(basetypes.MapType{}), errors.New("failed to convert labels to terraform list")
 	}
-	n.Labels = labelsList
-	return diag
+
+	return labelsList, nil
 }
 
 // GetJNLPSecretTF converts the JNLP secret to its underlying Terraform type.
 // If the agent is not a JNLP agent we set the value to null.
-func GetJNLPSecretTF(ctx context.Context, n *gojenkins.Node, d diag.Diagnostics) (types.String, diag.Diagnostics) {
+func GetJNLPSecretTF(ctx context.Context, n *gojenkins.Node) (types.String, error) {
 	// Check if the agent is a JNLP agent. If it is not set the value to null.
 	ok, err := n.IsJnlpAgent(ctx)
 	if !ok || err != nil {
-		return types.StringNull(), d
+		return types.StringNull(), nil
 	}
 
 	// Attempt to grab the secret
 	secret, err := n.GetJNLPSecret(ctx)
 	if err != nil {
-		d.AddError("failed to get jnlp secret", err.Error())
-		return types.StringNull(), d
+		return types.StringNull(), errors.New("failed retrieving jnlp secret")
 	}
 
 	// Return the secret as a Terraform string value.
-	return types.StringValue(secret), d
+	return types.StringValue(secret), nil
 }
 
 // Returns the JNLP attribute map
@@ -242,7 +244,7 @@ func convertJenkinsLauncherToTerraform(ctx context.Context, s *gojenkins.Slave) 
 }
 
 // GetLauncher parses the launcher from the rest api response and converts it into a Terraform type.
-func GetLauncher(ctx context.Context, s *gojenkins.Slave, d diag.Diagnostics) (*types.Object, diag.Diagnostics) {
+func GetLauncher(ctx context.Context, s *gojenkins.Slave) (*types.Object, error) {
 	// Do reflection to determine what type of Jenkins slave we have.
 	launcherConfiguration := &LauncherConfiguration{}
 	switch l := s.Launcher.Launcher.(type) {
@@ -258,7 +260,7 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave, d diag.Diagnostics) (*
 		// Convert the go struct to the Terraform object.
 		jnlpTfObject, diag := types.ObjectValueFrom(ctx, getJNLPAttributes(), tfJnlpConfig)
 		if diag.HasError() {
-			return nil, diag
+			return nil, errors.New("failed converting from jnlp object")
 		}
 
 		// Set the launcher configuration with JNLP options field, ssh options will be null.
@@ -282,28 +284,27 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave, d diag.Diagnostics) (*
 		// Convert the Terraform go struct to a Terraform object.
 		sshTfObject, diag := types.ObjectValueFrom(ctx, getSSHAttributes(), tfSSHConfig)
 		if diag.HasError() {
-			return nil, diag
+			return nil, errors.New("failed converting from ssh struct to terraform object")
 		}
 
 		// Set the JNLP options to null, and set the ssh terraform object.
 		launcherConfiguration.JNLPOptions = types.ObjectNull(getJNLPAttributes())
 		launcherConfiguration.SSHOptions = sshTfObject
 	default:
-		d.AddError("unsupported launcher type", "must be ssh or jnlp")
-		return nil, d
+		return nil, errors.New("unsupported launcher type, must be ssh or jnlp")
 	}
 
 	// Set the type of the launcher
 	tfType, err := convertJenkinsLauncherToTerraform(ctx, s)
 	if err != nil {
-		d.AddError("failed to convert launcher to terraform type", err.Error())
+		return nil, err
 	}
 	launcherConfiguration.Type = types.StringValue(tfType)
 
 	// Create the full launcher configuration object.
 	tfLauncherObject, diag := types.ObjectValueFrom(ctx, getLauncherAttributes(), launcherConfiguration)
 	if diag.HasError() {
-		return nil, diag
+		return nil, errors.New("failed converting from launcher struct to terraform launcher")
 	}
-	return &tfLauncherObject, d
+	return &tfLauncherObject, nil
 }
