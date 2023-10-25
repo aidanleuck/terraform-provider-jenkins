@@ -44,7 +44,7 @@ type JenkinsProviderModel struct {
 }
 
 func (p *JenkinsProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "jenkins-provider"
+	resp.TypeName = "jenkins"
 	resp.Version = p.version
 }
 
