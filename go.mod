@@ -1,4 +1,4 @@
-module terraform-provider-jenkins-provider
+module terraform-provider-jenkins
 
 go 1.19
 

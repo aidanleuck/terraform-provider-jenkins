@@ -214,6 +214,45 @@ func (r *NodeResourceModel) UpdateComputedResources(ctx context.Context, n *goje
 	return nil
 }
 
+func (r *NodeResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	var data NodeResourceModel
+	var prevData NodeResourceModel
+
+	// If state isn't set we don't need to modify the plan
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	// Read Terraform plan data into the model
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Get the old state
+	resp.Diagnostics.Append(req.State.Get(ctx, &prevData)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	var newConfiguration LauncherConfiguration
+	if diags := data.LauncherConfiguration.As(ctx, &newConfiguration, basetypes.ObjectAsOptions{}); diags.HasError() {
+		return
+	}
+	var oldConfiguration LauncherConfiguration
+	if diags := prevData.LauncherConfiguration.As(ctx, &oldConfiguration, basetypes.ObjectAsOptions{}); diags.HasError() {
+		return
+	}
+
+	if newConfiguration.Type != oldConfiguration.Type || data.Name != prevData.Name {
+		data.JNLPSecret = types.StringUnknown()
+	} else {
+		data.JNLPSecret = prevData.JNLPSecret
+	}
+
+	resp.Diagnostics.Append(resp.Plan.Set(ctx, &data)...)
+}
+
 // ValidateConfig adds custom validation to the schema. We use this to throw an error if both jnlp_options and ssh_options is set at one time.
 func (r *NodeResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var data NodeResourceModel

@@ -167,6 +167,16 @@ func (n *NodeResourceModel) ConvertLabelsList(ctx context.Context, labels string
 }
 
 func convertLabelList(ctx context.Context, labels string) (types.List, error) {
+	// If labels is an empty string just return an empty array
+	// otherwise we will get an array with a single element which is an empty string
+	if labels == "" {
+		list, diags := types.ListValueFrom(ctx, types.StringType, []string{})
+		if diags.HasError() {
+			return types.ListNull(basetypes.StringType{}), errors.New("failed converting empty list to terraform list.")
+		}
+		return list, nil
+	}
+
 	// Convert labels from space separated string to a slice.
 	labelsString := strings.Split(labels, " ")
 	labelsList, diag := types.ListValueFrom(ctx, types.StringType, labelsString)

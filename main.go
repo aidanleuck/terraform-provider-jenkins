@@ -8,7 +8,7 @@ import (
 	"encoding/xml"
 	"flag"
 	"log"
-	"terraform-provider-jenkins-provider/internal/provider"
+	"terraform-provider-jenkins/internal/provider"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
