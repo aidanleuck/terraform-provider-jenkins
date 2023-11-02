@@ -23,7 +23,7 @@ Creates a Jenkins Node.
 
 - `description` (String) Node description
 - `executors` (Number) Number of executors
-- `jnlp_secret` (String)
+- `jnlp_secret` (String, Sensitive)
 - `labels` (List of String)
 - `launcher_configuration` (Object) (see [below for nested schema](#nestedatt--launcher_configuration))
 - `remote_fs` (String) Where agent will store info
