@@ -121,6 +121,7 @@ func (r *NodeResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 			"jnlp_secret": schema.StringAttribute{
 				MarkdownDescription: "computed value that is set for jnlp nodes.",
 				Computed:            true,
+				Sensitive:           true,
 			},
 			"launcher_configuration": schema.SingleNestedAttribute{
 				MarkdownDescription: "Defines launcher options for the node.",

@@ -96,7 +96,8 @@ func (d *NodeDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Computed:    true,
 			},
 			"jnlp_secret": schema.StringAttribute{
-				Computed: true,
+				Computed:  true,
+				Sensitive: true,
 			},
 			"launcher_configuration": schema.ObjectAttribute{
 				AttributeTypes: getLauncherAttributes(),

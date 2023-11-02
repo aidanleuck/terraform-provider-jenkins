@@ -29,7 +29,7 @@ Creates a Jenkins Node.
 
 ### Read-Only
 
-- `jnlp_secret` (String) computed value that is set for jnlp nodes.
+- `jnlp_secret` (String, Sensitive) computed value that is set for jnlp nodes.
 
 <a id="nestedatt--launcher_configuration"></a>
 ### Nested Schema for `launcher_configuration`
