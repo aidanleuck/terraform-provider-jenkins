@@ -357,7 +357,7 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 }
 
 func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins.Node) error {
-	nodeConfiguration, err := n.GetLauncherConfig(ctx)
+	nodeConfiguration, err := n.GetSlaveConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -511,7 +511,14 @@ func (r *NodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// Get the node
 	node, err := r.client.GetNode(ctx, data.Name.ValueString())
 	if err != nil {
-		errMessage := fmt.Sprintf("failed to find jenkins node %s", data.Name.ValueString())
+		// Node has been deleted
+		if errors.Is(err, gojenkins.ErrNoNodeFound) {
+			resp.Diagnostics.AddWarning("node not found", fmt.Sprintf("node %s was not found in Jenkins.", data.Name.ValueString()))
+			resp.State.RemoveResource(ctx)
+			return
+		}
+
+		errMessage := fmt.Sprintf("error occurred retrieving data for node %s", data.Name.ValueString())
 		resp.Diagnostics.AddError(errMessage, err.Error())
 		return
 	}
