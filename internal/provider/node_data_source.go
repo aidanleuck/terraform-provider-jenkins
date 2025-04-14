@@ -126,7 +126,7 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	}
 
 	// Get node configuration
-	slaveConfig, err := node.GetLauncherConfig(ctx)
+	slaveConfig, err := node.GetSlaveConfig(ctx)
 	if err != nil {
 		errMessage := fmt.Sprintf("failed to retrieve jenkins launcher config %s", data.Name.ValueString())
 		resp.Diagnostics.AddError(errMessage, err.Error())
