@@ -512,7 +512,7 @@ func (r *NodeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	node, err := r.client.GetNode(ctx, data.Name.ValueString())
 	if err != nil {
 		// Node has been deleted
-		if err == gojenkins.ErrNotFound {
+		if errors.Is(err, gojenkins.ErrNoNodeFound) {
 			resp.Diagnostics.AddWarning("node not found", fmt.Sprintf("node %s was not found in Jenkins.", data.Name.ValueString()))
 			resp.State.RemoveResource(ctx)
 			return
