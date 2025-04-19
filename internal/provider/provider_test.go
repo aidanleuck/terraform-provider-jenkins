@@ -13,5 +13,5 @@ import (
 // CLI command executed to create a provider server to which the CLI can
 // reattach.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
-	"jenkins-provider": providerserver.NewProtocol6WithError(New("test")()),
+	"jenkins": providerserver.NewProtocol6WithError(New("test")()),
 }
