@@ -1,12 +1,10 @@
 module terraform-provider-jenkins
 
-go 1.23.0
-
-toolchain go1.23.3
+go 1.23.7
 
 require (
 	github.com/aidanleuck/gojenkins v1.0.0
-	github.com/hashicorp/terraform-plugin-docs v0.21.0
+	github.com/hashicorp/terraform-plugin-docs v0.22.0
 	github.com/hashicorp/terraform-plugin-framework v1.15.0
 	github.com/hashicorp/terraform-plugin-go v0.28.0
 	github.com/hashicorp/terraform-plugin-log v0.9.0
