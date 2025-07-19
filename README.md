@@ -1,18 +1,29 @@
-# Terraform Provider Scaffolding (Terraform Plugin Framework)
+# Terraform Provider for Jenkins
 
-_This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://developer.hashicorp.com/terraform/plugin/framework-benefits) in the Terraform documentation for additional information._
+A modern, feature-rich Terraform provider for managing Jenkins infrastructure built with the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework).
 
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
+## Why This Provider?
 
-- A resource and a data source (`internal/provider/`),
-- Examples (`examples/`) and generated documentation (`docs/`),
-- Miscellaneous meta files.
+This Jenkins provider stands out for several compelling reasons:
 
-These files contain boilerplate code that you will need to edit to create your own Terraform provider. Tutorials for creating Terraform providers can be found on the [HashiCorp Developer](https://developer.hashicorp.com/terraform/tutorials/providers-plugin-framework) platform. _Terraform Plugin Framework specific guides are titled accordingly._
+🏗️ **Modern Architecture**: Built on the latest Terraform Plugin Framework, ensuring excellent performance, type safety, and future compatibility.
 
-Please see the [GitHub template repository documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template) for how to create a new repository from this template on GitHub.
+🔐 **Comprehensive Security**: Supports multiple authentication methods including username/password and custom CA certificates for self-signed SSL setups.
 
-Once you've written your provider, you'll want to [publish it on the Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing) so that others can use it.
+🖥️ **Flexible Node Management**: Complete support for both SSH and JNLP Jenkins agents with extensive configuration options:
+- SSH agents with custom Java paths, JVM options, and connection parameters
+- JNLP agents with WebSocket support and workspace configuration
+- Automatic secret management for secure agent connections
+
+⚡ **Developer Experience**: Clean, well-documented codebase with:
+- Comprehensive test coverage using Docker containers
+- Auto-generated documentation
+- Clear separation of concerns
+- Professional error handling and logging
+
+🔧 **Production Ready**: Includes proper configuration validation, retry logic, and robust error handling to ensure reliable infrastructure management.
+
+This provider bridges the gap between Jenkins administration and Infrastructure as Code, making it easy to manage Jenkins nodes declaratively alongside your other infrastructure resources.
 
 ## Requirements
 
@@ -45,7 +56,42 @@ Then commit the changes to `go.mod` and `go.sum`.
 
 ## Using the provider
 
-Fill this in for each provider
+This provider enables you to manage Jenkins infrastructure as code. Here's a quick example:
+
+```hcl
+terraform {
+  required_providers {
+    jenkins = {
+      source = "aidanleuck/jenkins"
+    }
+  }
+}
+
+provider "jenkins" {
+  url      = "https://jenkins.example.com"
+  username = var.jenkins_username
+  password = var.jenkins_password
+}
+
+# Create an SSH-based Jenkins node
+resource "jenkins_node" "build_agent" {
+  name      = "build-agent-01"
+  remote_fs = "/home/jenkins"
+  executors = 2
+  labels    = ["linux", "docker", "build"]
+  
+  launcher_configuration {
+    type = "ssh"
+    ssh_options {
+      host         = "10.0.1.100"
+      credentials_id = "ssh-key-credential"
+      java_path    = "/usr/bin/java"
+    }
+  }
+}
+```
+
+For more detailed examples and configuration options, see the [documentation](docs/).
 
 ## Developing the Provider
 
