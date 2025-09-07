@@ -2,7 +2,47 @@
 
 _This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://developer.hashicorp.com/terraform/plugin/framework-benefits) in the Terraform documentation for additional information._
 
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
+This repository contains:
+
+1. **Terraform Provider for Jenkins** - A template for creating Terraform providers, containing resources and data sources for Jenkins management
+2. **Bitbucket Server Auto-Approve Bot** - A standalone CLI tool for automatically approving pull requests in Bitbucket Server (similar to renovate-approve-bot for Bitbucket Cloud)
+
+## Bitbucket Server Auto-Approve Bot
+
+A simple auto-approval bot for Bitbucket Server that can automatically approve pull requests based on configurable rules. Perfect for approving dependency updates from tools like Renovate or Dependabot.
+
+### Quick Start
+
+```bash
+# Build the bot
+go build -o bitbucket-approve-bot ./cmd/bitbucket-approve-bot
+
+# Set credentials
+export BITBUCKET_USERNAME=your-username
+export BITBUCKET_PASSWORD=your-personal-access-token
+
+# Run the bot
+./bitbucket-approve-bot \
+  -server https://bitbucket.company.com \
+  -project MYPROJ \
+  -allowed-users renovate,dependabot \
+  -dry-run
+```
+
+For detailed documentation, see [README-bitbucket-bot.md](README-bitbucket-bot.md).
+
+### Features
+
+- Auto-approve PRs from specific users (e.g., renovate, dependabot)
+- Title pattern matching with regex
+- Multi-repository support
+- Dry-run mode for testing
+- Docker support
+- Continuous polling
+
+## Terraform Provider for Jenkins
+
+This repository contains a template for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
 
 - A resource and a data source (`internal/provider/`),
 - Examples (`examples/`) and generated documentation (`docs/`),

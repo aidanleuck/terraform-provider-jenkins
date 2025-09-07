@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  bitbucket-approve-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bitbucket-bot
+    environment:
+      - BITBUCKET_USERNAME=${BITBUCKET_USERNAME}
+      - BITBUCKET_PASSWORD=${BITBUCKET_PASSWORD}
+    command: [
+      "-server", "${BITBUCKET_SERVER}",
+      "-project", "${BITBUCKET_PROJECT}",
+      "-repo", "${BITBUCKET_REPO:-}",
+      "-allowed-users", "${ALLOWED_USERS:-renovate,dependabot}",
+      "-title-pattern", "${TITLE_PATTERN:-}",
+      "-interval", "${POLLING_INTERVAL:-60s}",
+      "-dry-run=${DRY_RUN:-false}"
+    ]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
