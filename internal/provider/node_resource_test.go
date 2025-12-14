@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package provider
 
 import (
@@ -864,4 +867,594 @@ func compareSSHSettings(actual *gojenkins.SSHLauncher, expected *gojenkins.SSHLa
 	}
 
 	return nil
+}
+
+// TestNodeWithEnvironmentVariables tests node creation with environment variables
+func TestNodeWithEnvironmentVariables(t *testing.T) {
+	resourceConfigStep1 := `
+resource "jenkins_node" "test" {
+	name = "test_node_env"
+	executors = 2
+	description = "Node with environment variables"
+	remote_fs = "/var/jenkins"
+	labels = ["env-test"]
+	environment_variables = {
+		"JAVA_HOME" = "/usr/lib/jvm/java-11"
+		"PATH" = "/usr/local/bin:/usr/bin"
+		"MY_VAR" = "my_value"
+	}
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	resourceConfigStep2 := `
+resource "jenkins_node" "test" {
+	name = "test_node_env"
+	executors = 2
+	description = "Node with updated environment variables"
+	remote_fs = "/var/jenkins"
+	labels = ["env-test"]
+	environment_variables = {
+		"JAVA_HOME" = "/usr/lib/jvm/java-17"
+		"NEW_VAR" = "new_value"
+	}
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig1 := providerConfig + "\n" + resourceConfigStep1
+	mergedConfig2 := providerConfig + "\n" + resourceConfigStep2
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig1, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_env"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "executors", "2"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.JAVA_HOME", "/usr/lib/jvm/java-11"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.PATH", "/usr/local/bin:/usr/bin"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.MY_VAR", "my_value"),
+					verifyNodeEnvironmentVariables("test_node_env", map[string]string{
+						"JAVA_HOME": "/usr/lib/jvm/java-11",
+						"PATH":      "/usr/local/bin:/usr/bin",
+						"MY_VAR":    "my_value",
+					}),
+				),
+			},
+			{
+				Config: templateConfig(t, mergedConfig2, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.JAVA_HOME", "/usr/lib/jvm/java-17"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.NEW_VAR", "new_value"),
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "environment_variables.PATH"),
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "environment_variables.MY_VAR"),
+					verifyNodeEnvironmentVariables("test_node_env", map[string]string{
+						"JAVA_HOME": "/usr/lib/jvm/java-17",
+						"NEW_VAR":   "new_value",
+					}),
+				),
+			},
+		},
+	})
+}
+
+// TestNodeWithToolLocations tests node creation with tool locations
+func TestNodeWithToolLocations(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "test_node_tools"
+	executors = 1
+	description = "Node with tool locations"
+	remote_fs = "/var/jenkins"
+	labels = ["tools-test"]
+	tool_locations = {
+		"hudson.plugins.git.GitTool$DescriptorImpl:Default" = "/usr/bin/git"
+		"hudson.model.JDK:JDK11" = "/usr/lib/jvm/java-11"
+	}
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_tools"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "tool_locations.hudson.plugins.git.GitTool$DescriptorImpl:Default", "/usr/bin/git"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "tool_locations.hudson.model.JDK:JDK11", "/usr/lib/jvm/java-11"),
+					verifyNodeToolLocations("test_node_tools"),
+				),
+			},
+		},
+	})
+}
+
+// TestNodeWithDiskSpaceMonitor tests node creation with disk space monitoring
+func TestNodeWithDiskSpaceMonitor(t *testing.T) {
+	resourceConfigStep1 := `
+resource "jenkins_node" "test" {
+	name = "test_node_disk"
+	executors = 1
+	description = "Node with disk space monitor"
+	remote_fs = "/var/jenkins"
+	labels = ["disk-test"]
+	free_disk_space_threshold = "1GiB"
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	resourceConfigStep2 := `
+resource "jenkins_node" "test" {
+	name = "test_node_disk"
+	executors = 1
+	description = "Node with updated disk space monitor"
+	remote_fs = "/var/jenkins"
+	labels = ["disk-test"]
+	free_disk_space_threshold = "3GiB"
+	free_temp_space_threshold = "2GiB"
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig1 := providerConfig + "\n" + resourceConfigStep1
+	mergedConfig2 := providerConfig + "\n" + resourceConfigStep2
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig1, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_disk"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_threshold", "1GiB"),
+					verifyNodeDiskSpaceMonitor("test_node_disk", "1GiB"),
+				),
+			},
+			{
+				Config: templateConfig(t, mergedConfig2, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_threshold", "3GiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_temp_space_threshold", "2GiB"),
+					verifyNodeDiskSpaceThresholds("test_node_disk", "3GiB", "2GiB"),
+				),
+			},
+		},
+	})
+}
+
+// verifyNodeEnvironmentVariables verifies environment variables are set correctly in Jenkins
+func verifyNodeEnvironmentVariables(nodeName string, expectedVars map[string]string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var envProp *gojenkins.EnvironmentVariablesNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.EnvironmentVariablesNodeProperty); ok {
+				envProp = p
+				break
+			}
+		}
+
+		if envProp == nil {
+			return fmt.Errorf("no environment variables property found")
+		}
+
+		actualVars := make(map[string]string)
+		for _, env := range envProp.EnvVars.Tree {
+			actualVars[env.Key] = env.Value
+		}
+
+		for key, expectedValue := range expectedVars {
+			if actualValue, ok := actualVars[key]; !ok {
+				return fmt.Errorf("environment variable %s not found", key)
+			} else if actualValue != expectedValue {
+				return fmt.Errorf("environment variable %s has value %s, expected %s", key, actualValue, expectedValue)
+			}
+		}
+
+		return nil
+	}
+}
+
+// verifyNodeToolLocations verifies tool locations are set correctly in Jenkins
+func verifyNodeToolLocations(nodeName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var toolProp *gojenkins.ToolLocationNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.ToolLocationNodeProperty); ok {
+				toolProp = p
+				break
+			}
+		}
+
+		if toolProp == nil {
+			return fmt.Errorf("no tool location property found")
+		}
+
+		if len(toolProp.Locations) == 0 {
+			return fmt.Errorf("no tool locations configured")
+		}
+
+		return nil
+	}
+}
+
+// verifyNodeDiskSpaceMonitor verifies disk space monitor is set correctly in Jenkins
+func verifyNodeDiskSpaceMonitor(nodeName string, expectedThreshold string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.DiskSpaceMonitorNodeProperty); ok {
+				diskProp = p
+				break
+			}
+		}
+
+		if diskProp == nil {
+			return fmt.Errorf("no disk space monitor property found")
+		}
+
+		if diskProp.FreeDiskSpaceThreshold != expectedThreshold {
+			return fmt.Errorf("disk space threshold is %s, expected %s", diskProp.FreeDiskSpaceThreshold, expectedThreshold)
+		}
+
+		return nil
+	}
+}
+
+// TestNodeWithAllDiskSpaceThresholds tests node creation with all 4 disk space threshold fields
+func TestNodeWithAllDiskSpaceThresholds(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "test_node_all_thresholds"
+	executors = 1
+	description = "Node with all disk space thresholds"
+	remote_fs = "/var/jenkins"
+	labels = ["disk-all-test"]
+	free_disk_space_threshold = "1GiB"
+	free_temp_space_threshold = "500MiB"
+	free_disk_space_warning_threshold = "800MiB"
+	free_temp_space_warning_threshold = "400MiB"
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_all_thresholds"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_threshold", "1GiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_temp_space_threshold", "500MiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_warning_threshold", "800MiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_temp_space_warning_threshold", "400MiB"),
+					verifyNodeAllDiskSpaceThresholds("test_node_all_thresholds", "1GiB", "500MiB", "800MiB", "400MiB"),
+				),
+			},
+		},
+	})
+}
+
+// TestNodeWithDeferredWipeout tests node creation with workspace cleanup (deferred wipeout)
+func TestNodeWithDeferredWipeout(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "test_node_wipeout"
+	executors = 1
+	description = "Node with deferred wipeout disabled"
+	remote_fs = "/var/jenkins"
+	labels = ["wipeout-test"]
+	disable_deferred_wipeout = true
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_wipeout"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "disable_deferred_wipeout", "true"),
+					verifyNodeWorkspaceCleanup("test_node_wipeout"),
+				),
+			},
+		},
+	})
+}
+
+// TestNodeWithAllProperties tests node creation with all node properties combined
+func TestNodeWithAllProperties(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "test_node_all_properties"
+	executors = 2
+	description = "Node with all properties combined"
+	remote_fs = "/var/jenkins"
+	labels = ["all-properties-test"]
+	environment_variables = {
+		"TEST_VAR" = "test_value"
+	}
+	tool_locations = {
+		"hudson.plugins.git.GitTool$DescriptorImpl:Default" = "/usr/bin/git"
+	}
+	free_disk_space_threshold = "2GiB"
+	free_temp_space_threshold = "1GiB"
+	free_disk_space_warning_threshold = "1500MiB"
+	free_temp_space_warning_threshold = "800MiB"
+	disable_deferred_wipeout = true
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+	`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "name", "test_node_all_properties"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "executors", "2"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "environment_variables.TEST_VAR", "test_value"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "tool_locations.hudson.plugins.git.GitTool$DescriptorImpl:Default", "/usr/bin/git"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_threshold", "2GiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_temp_space_threshold", "1GiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_disk_space_warning_threshold", "1500MiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "free_temp_space_warning_threshold", "800MiB"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "disable_deferred_wipeout", "true"),
+					verifyNodeAllDiskSpaceThresholds("test_node_all_properties", "2GiB", "1GiB", "1500MiB", "800MiB"),
+					verifyNodeWorkspaceCleanup("test_node_all_properties"),
+				),
+			},
+			{
+				Config: templateConfig(t, providerConfig+`
+resource "jenkins_node" "test" {
+	name = "test_node_all_properties"
+	executors = 2
+	description = "Node with properties removed"
+	remote_fs = "/var/jenkins"
+	labels = ["all-properties-test"]
+	launcher_configuration = {
+		type = "jnlp"	
+	}
+}
+`, pd),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "environment_variables.TEST_VAR"),
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "tool_locations.hudson.plugins.git.GitTool$DescriptorImpl:Default"),
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "free_disk_space_threshold"),
+					resource.TestCheckNoResourceAttr(testNodeResourceName, "disable_deferred_wipeout"),
+					verifyNodeHasNoProperties("test_node_all_properties"),
+				),
+			},
+		},
+	})
+}
+
+// verifyNodeHasNoProperties verifies that a node has no properties set
+func verifyNodeHasNoProperties(nodeName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties != nil && len(config.NodeProperties.Properties) > 0 {
+			return fmt.Errorf("expected no properties, but found %d properties", len(config.NodeProperties.Properties))
+		}
+
+		return nil
+	}
+}
+
+// verifyNodeAllDiskSpaceThresholds verifies all 4 disk space thresholds are set correctly in Jenkins
+func verifyNodeAllDiskSpaceThresholds(nodeName, freeDisk, freeTemp, freeDiskWarning, freeTempWarning string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.DiskSpaceMonitorNodeProperty); ok {
+				diskProp = p
+				break
+			}
+		}
+
+		if diskProp == nil {
+			return fmt.Errorf("no disk space monitor property found")
+		}
+
+		if diskProp.FreeDiskSpaceThreshold != freeDisk {
+			return fmt.Errorf("free disk space threshold is %s, expected %s", diskProp.FreeDiskSpaceThreshold, freeDisk)
+		}
+
+		if diskProp.FreeTempSpaceThreshold != freeTemp {
+			return fmt.Errorf("free temp space threshold is %s, expected %s", diskProp.FreeTempSpaceThreshold, freeTemp)
+		}
+
+		if diskProp.FreeDiskSpaceWarningThreshold != freeDiskWarning {
+			return fmt.Errorf("free disk space warning threshold is %s, expected %s", diskProp.FreeDiskSpaceWarningThreshold, freeDiskWarning)
+		}
+
+		if diskProp.FreeTempSpaceWarningThreshold != freeTempWarning {
+			return fmt.Errorf("free temp space warning threshold is %s, expected %s", diskProp.FreeTempSpaceWarningThreshold, freeTempWarning)
+		}
+
+		return nil
+	}
+}
+
+// verifyNodeDiskSpaceThresholds verifies the basic disk space thresholds (no warning thresholds)
+func verifyNodeDiskSpaceThresholds(nodeName, freeDisk, freeTemp string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.DiskSpaceMonitorNodeProperty); ok {
+				diskProp = p
+				break
+			}
+		}
+
+		if diskProp == nil {
+			return fmt.Errorf("no disk space monitor property found")
+		}
+
+		if diskProp.FreeDiskSpaceThreshold != freeDisk {
+			return fmt.Errorf("free disk space threshold is %s, expected %s", diskProp.FreeDiskSpaceThreshold, freeDisk)
+		}
+
+		if diskProp.FreeTempSpaceThreshold != freeTemp {
+			return fmt.Errorf("free temp space threshold is %s, expected %s", diskProp.FreeTempSpaceThreshold, freeTemp)
+		}
+
+		return nil
+	}
+}
+
+// verifyNodeWorkspaceCleanup verifies workspace cleanup property is set correctly in Jenkins
+func verifyNodeWorkspaceCleanup(nodeName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		ctx := context.Background()
+		node, err := testContainer.Jenkins.GetNode(ctx, nodeName)
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		config, err := node.GetSlaveConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get node config: %w", err)
+		}
+
+		if config.NodeProperties == nil || len(config.NodeProperties.Properties) == 0 {
+			return fmt.Errorf("node has no properties")
+		}
+
+		var workspaceProp *gojenkins.WorkspaceCleanupNodeProperty
+		for _, prop := range config.NodeProperties.Properties {
+			if p, ok := prop.(*gojenkins.WorkspaceCleanupNodeProperty); ok {
+				workspaceProp = p
+				break
+			}
+		}
+
+		if workspaceProp == nil {
+			return fmt.Errorf("no workspace cleanup property found")
+		}
+
+		return nil
+	}
 }
