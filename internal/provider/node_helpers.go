@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // The provider package implements a Jenkins provider for Terraform
 //
 // node_helpers.go implements utility methods for converting between the underlying
@@ -318,4 +321,186 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave) (*types.Object, error)
 		return nil, errors.New("failed converting from launcher struct to terraform launcher")
 	}
 	return &tfLauncherObject, nil
+}
+
+// CreateNodeProperties converts Terraform node property configuration to gojenkins node properties
+func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenkins.NodeProperty, error) {
+	var properties []gojenkins.NodeProperty
+	
+	// Handle environment variables
+	if !n.EnvironmentVariables.IsNull() && !n.EnvironmentVariables.IsUnknown() {
+		envVars := make(map[string]string)
+		diags := n.EnvironmentVariables.ElementsAs(ctx, &envVars, false)
+		if diags.HasError() {
+			return nil, errors.New("failed to convert environment variables")
+		}
+		
+		if len(envVars) > 0 {
+			properties = append(properties, gojenkins.NewEnvironmentVariablesNodeProperty(envVars))
+		}
+	}
+	
+	// Handle tool locations
+	if !n.ToolLocations.IsNull() && !n.ToolLocations.IsUnknown() {
+		toolLocs := make(map[string]string)
+		diags := n.ToolLocations.ElementsAs(ctx, &toolLocs, false)
+		if diags.HasError() {
+			return nil, errors.New("failed to convert tool locations")
+		}
+		
+		if len(toolLocs) > 0 {
+			properties = append(properties, gojenkins.NewToolLocationNodeProperty(toolLocs))
+		}
+	}
+	
+	// Handle disk space thresholds
+	if !n.FreeDiskSpaceThreshold.IsNull() && !n.FreeDiskSpaceThreshold.IsUnknown() {
+		freeDisk := n.FreeDiskSpaceThreshold.ValueString()
+		if freeDisk != "" {
+			var args []string
+			
+			// Add free temp threshold if specified, otherwise it will default to freeDisk
+			if !n.FreeTempSpaceThreshold.IsNull() && !n.FreeTempSpaceThreshold.IsUnknown() {
+				args = append(args, n.FreeTempSpaceThreshold.ValueString())
+			}
+			
+			// Add warning thresholds if specified
+			if !n.FreeDiskSpaceWarningThreshold.IsNull() && !n.FreeDiskSpaceWarningThreshold.IsUnknown() {
+				// Need to ensure we have temp threshold first
+				if len(args) == 0 {
+					args = append(args, freeDisk) // default temp to same as disk
+				}
+				args = append(args, n.FreeDiskSpaceWarningThreshold.ValueString())
+			}
+			
+			if !n.FreeTempSpaceWarningThreshold.IsNull() && !n.FreeTempSpaceWarningThreshold.IsUnknown() {
+				// Need to ensure we have both temp and disk warning first
+				for len(args) < 2 {
+					if len(args) == 0 {
+						args = append(args, freeDisk) // default temp to same as disk
+					} else {
+						args = append(args, "") // empty disk warning
+					}
+				}
+				args = append(args, n.FreeTempSpaceWarningThreshold.ValueString())
+			}
+			
+			properties = append(properties, gojenkins.NewDiskSpaceMonitorNodeProperty(freeDisk, args...))
+		}
+	}
+	
+	// Handle workspace cleanup (deferred wipeout)
+	// Only add the property if disable_deferred_wipeout is true
+	// The presence of the property means deferred wipeout is disabled
+	if !n.DisableDeferredWipeout.IsNull() && !n.DisableDeferredWipeout.IsUnknown() {
+		if n.DisableDeferredWipeout.ValueBool() {
+			properties = append(properties, gojenkins.NewDeferredWipeoutNodeProperty())
+		}
+	}
+	
+	return properties, nil
+}
+
+// UpdateNodePropertiesFromJenkins updates Terraform state with node properties from Jenkins
+func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context, nodeConfig *gojenkins.Slave) error {
+	if nodeConfig.NodeProperties == nil || len(nodeConfig.NodeProperties.Properties) == 0 {
+		n.EnvironmentVariables = types.MapNull(types.StringType)
+		n.ToolLocations = types.MapNull(types.StringType)
+		n.FreeDiskSpaceThreshold = types.StringNull()
+		n.FreeTempSpaceThreshold = types.StringNull()
+		n.FreeDiskSpaceWarningThreshold = types.StringNull()
+		n.FreeTempSpaceWarningThreshold = types.StringNull()
+		n.DisableDeferredWipeout = types.BoolNull()
+		return nil
+	}
+	
+	// Extract properties from Jenkins config
+	envVars := make(map[string]string)
+	toolLocs := make(map[string]string)
+	var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
+	var hasDeferredWipeout bool
+	
+	for _, prop := range nodeConfig.NodeProperties.Properties {
+		switch p := prop.(type) {
+		case *gojenkins.EnvironmentVariablesNodeProperty:
+			for _, env := range p.EnvVars.Tree {
+				envVars[env.Key] = env.Value
+			}
+		case *gojenkins.ToolLocationNodeProperty:
+			for _, loc := range p.Locations {
+				key := loc.Type + ":" + loc.Name
+				toolLocs[key] = loc.Home
+			}
+		case *gojenkins.DiskSpaceMonitorNodeProperty:
+			diskProp = p
+		case *gojenkins.WorkspaceCleanupNodeProperty:
+			hasDeferredWipeout = true
+		}
+	}
+	
+	// Update environment variables only if user configured them
+	if !n.EnvironmentVariables.IsNull() {
+		if len(envVars) > 0 {
+			envMap, diags := types.MapValueFrom(ctx, types.StringType, envVars)
+			if diags.HasError() {
+				return errors.New("failed to convert environment variables to terraform map")
+			}
+			n.EnvironmentVariables = envMap
+		} else {
+			n.EnvironmentVariables = types.MapNull(types.StringType)
+		}
+	}
+	
+	// Update tool locations only if user configured them
+	if !n.ToolLocations.IsNull() {
+		if len(toolLocs) > 0 {
+			toolMap, diags := types.MapValueFrom(ctx, types.StringType, toolLocs)
+			if diags.HasError() {
+				return errors.New("failed to convert tool locations to terraform map")
+			}
+			n.ToolLocations = toolMap
+		} else {
+			n.ToolLocations = types.MapNull(types.StringType)
+		}
+	}
+	
+	// Update disk thresholds only if user configured them
+	if !n.FreeDiskSpaceThreshold.IsNull() {
+		if diskProp != nil && diskProp.FreeDiskSpaceThreshold != "" {
+			n.FreeDiskSpaceThreshold = types.StringValue(diskProp.FreeDiskSpaceThreshold)
+		} else {
+			n.FreeDiskSpaceThreshold = types.StringNull()
+		}
+	}
+	
+	if !n.FreeTempSpaceThreshold.IsNull() {
+		if diskProp != nil && diskProp.FreeTempSpaceThreshold != "" {
+			n.FreeTempSpaceThreshold = types.StringValue(diskProp.FreeTempSpaceThreshold)
+		} else {
+			n.FreeTempSpaceThreshold = types.StringNull()
+		}
+	}
+	
+	if !n.FreeDiskSpaceWarningThreshold.IsNull() {
+		if diskProp != nil && diskProp.FreeDiskSpaceWarningThreshold != "" {
+			n.FreeDiskSpaceWarningThreshold = types.StringValue(diskProp.FreeDiskSpaceWarningThreshold)
+		} else {
+			n.FreeDiskSpaceWarningThreshold = types.StringNull()
+		}
+	}
+	
+	if !n.FreeTempSpaceWarningThreshold.IsNull() {
+		if diskProp != nil && diskProp.FreeTempSpaceWarningThreshold != "" {
+			n.FreeTempSpaceWarningThreshold = types.StringValue(diskProp.FreeTempSpaceWarningThreshold)
+		} else {
+			n.FreeTempSpaceWarningThreshold = types.StringNull()
+		}
+	}
+	
+	// Update workspace cleanup only if user configured it
+	if !n.DisableDeferredWipeout.IsNull() {
+		n.DisableDeferredWipeout = types.BoolValue(hasDeferredWipeout)
+	}
+	
+	return nil
 }

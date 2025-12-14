@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // The provider package implements a Jenkins provider for Terraform
 //
 // node_data_source.go implements a node_data_source for Jenkins. This allows
@@ -26,13 +29,20 @@ type NodeDataSource struct {
 
 // Node data source model maps the Terraform schema to go types.
 type NodeDataSourceModel struct {
-	Name                  types.String `tfsdk:"name"`
-	NumExecutors          types.Int64  `tfsdk:"executors"`
-	Description           types.String `tfsdk:"description"`
-	RemoteFS              types.String `tfsdk:"remote_fs"`
-	Labels                types.List   `tfsdk:"labels"`
-	JNLPSecret            types.String `tfsdk:"jnlp_secret"`
-	LauncherConfiguration types.Object `tfsdk:"launcher_configuration"`
+	Name                          types.String `tfsdk:"name"`
+	NumExecutors                  types.Int64  `tfsdk:"executors"`
+	Description                   types.String `tfsdk:"description"`
+	RemoteFS                      types.String `tfsdk:"remote_fs"`
+	Labels                        types.List   `tfsdk:"labels"`
+	JNLPSecret                    types.String `tfsdk:"jnlp_secret"`
+	LauncherConfiguration         types.Object `tfsdk:"launcher_configuration"`
+	EnvironmentVariables          types.Map    `tfsdk:"environment_variables"`
+	ToolLocations                 types.Map    `tfsdk:"tool_locations"`
+	FreeDiskSpaceThreshold        types.String `tfsdk:"free_disk_space_threshold"`
+	FreeTempSpaceThreshold        types.String `tfsdk:"free_temp_space_threshold"`
+	FreeDiskSpaceWarningThreshold types.String `tfsdk:"free_disk_space_warning_threshold"`
+	FreeTempSpaceWarningThreshold types.String `tfsdk:"free_temp_space_warning_threshold"`
+	DisableDeferredWipeout        types.Bool   `tfsdk:"disable_deferred_wipeout"`
 }
 
 // Metadata exports the name of the data source with is provider + type + _node.
@@ -92,16 +102,49 @@ func (d *NodeDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Computed:            true,
 			},
 			"labels": schema.ListAttribute{
-				ElementType: types.StringType,
-				Computed:    true,
+				MarkdownDescription: "Labels assigned to the node",
+				ElementType:         types.StringType,
+				Computed:            true,
 			},
 			"jnlp_secret": schema.StringAttribute{
-				Computed:  true,
-				Sensitive: true,
+				MarkdownDescription: "JNLP secret for agent connection",
+				Computed:            true,
+				Sensitive:           true,
 			},
 			"launcher_configuration": schema.ObjectAttribute{
-				AttributeTypes: getLauncherAttributes(),
-				Computed:       true,
+				MarkdownDescription: "Launcher configuration for the node",
+				AttributeTypes:      getLauncherAttributes(),
+				Computed:            true,
+			},
+			"environment_variables": schema.MapAttribute{
+				MarkdownDescription: "Environment variables set on the node",
+				ElementType:         types.StringType,
+				Computed:            true,
+			},
+			"tool_locations": schema.MapAttribute{
+				MarkdownDescription: "Tool locations configured on the node",
+				ElementType:         types.StringType,
+				Computed:            true,
+			},
+			"free_disk_space_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free disk space threshold",
+				Computed:            true,
+			},
+			"free_temp_space_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free temp space threshold",
+				Computed:            true,
+			},
+			"free_disk_space_warning_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free disk space warning threshold",
+				Computed:            true,
+			},
+			"free_temp_space_warning_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free temp space warning threshold",
+				Computed:            true,
+			},
+			"disable_deferred_wipeout": schema.BoolAttribute{
+				MarkdownDescription: "Whether deferred wipeout is disabled",
+				Computed:            true,
 			},
 		},
 	}
@@ -164,6 +207,84 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	}
 
 	data.LauncherConfiguration = *launcher
+
+	// Extract node properties
+	if slaveConfig.NodeProperties != nil && len(slaveConfig.NodeProperties.Properties) > 0 {
+		envVars := make(map[string]string)
+		toolLocs := make(map[string]string)
+		var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
+		var hasDeferredWipeout bool
+
+		for _, prop := range slaveConfig.NodeProperties.Properties {
+			switch p := prop.(type) {
+			case *gojenkins.EnvironmentVariablesNodeProperty:
+				for _, env := range p.EnvVars.Tree {
+					envVars[env.Key] = env.Value
+				}
+			case *gojenkins.ToolLocationNodeProperty:
+				for _, loc := range p.Locations {
+					key := loc.Type + ":" + loc.Name
+					toolLocs[key] = loc.Home
+				}
+			case *gojenkins.DiskSpaceMonitorNodeProperty:
+				diskProp = p
+			case *gojenkins.WorkspaceCleanupNodeProperty:
+				hasDeferredWipeout = true
+			}
+		}
+
+		if len(envVars) > 0 {
+			envMap, diags := types.MapValueFrom(ctx, types.StringType, envVars)
+			if diags.HasError() {
+				resp.Diagnostics.Append(diags...)
+				return
+			}
+			data.EnvironmentVariables = envMap
+		} else {
+			data.EnvironmentVariables = types.MapNull(types.StringType)
+		}
+
+		if len(toolLocs) > 0 {
+			toolMap, diags := types.MapValueFrom(ctx, types.StringType, toolLocs)
+			if diags.HasError() {
+				resp.Diagnostics.Append(diags...)
+				return
+			}
+			data.ToolLocations = toolMap
+		} else {
+			data.ToolLocations = types.MapNull(types.StringType)
+		}
+
+		if diskProp != nil {
+			data.FreeDiskSpaceThreshold = types.StringValue(diskProp.FreeDiskSpaceThreshold)
+			data.FreeTempSpaceThreshold = types.StringValue(diskProp.FreeTempSpaceThreshold)
+			if diskProp.FreeDiskSpaceWarningThreshold != "" {
+				data.FreeDiskSpaceWarningThreshold = types.StringValue(diskProp.FreeDiskSpaceWarningThreshold)
+			} else {
+				data.FreeDiskSpaceWarningThreshold = types.StringNull()
+			}
+			if diskProp.FreeTempSpaceWarningThreshold != "" {
+				data.FreeTempSpaceWarningThreshold = types.StringValue(diskProp.FreeTempSpaceWarningThreshold)
+			} else {
+				data.FreeTempSpaceWarningThreshold = types.StringNull()
+			}
+		} else {
+			data.FreeDiskSpaceThreshold = types.StringNull()
+			data.FreeTempSpaceThreshold = types.StringNull()
+			data.FreeDiskSpaceWarningThreshold = types.StringNull()
+			data.FreeTempSpaceWarningThreshold = types.StringNull()
+		}
+
+		data.DisableDeferredWipeout = types.BoolValue(hasDeferredWipeout)
+	} else {
+		data.EnvironmentVariables = types.MapNull(types.StringType)
+		data.ToolLocations = types.MapNull(types.StringType)
+		data.FreeDiskSpaceThreshold = types.StringNull()
+		data.FreeTempSpaceThreshold = types.StringNull()
+		data.FreeDiskSpaceWarningThreshold = types.StringNull()
+		data.FreeTempSpaceWarningThreshold = types.StringNull()
+		data.DisableDeferredWipeout = types.BoolNull()
+	}
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

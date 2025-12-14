@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // The provider package implements a Jenkins provider for Terraform
 //
 // node_data_source_test.go implements a set of tests to validate the data source
@@ -330,6 +333,74 @@ func TestNoNodeError(t *testing.T) {
 			{
 				Config:      templateConfig(t, nodeDataSourceConfig, d),
 				ExpectError: regexp.MustCompile(".+failed to find jenkins node.+"),
+			},
+		},
+	})
+}
+
+// TestNodeDataSourceWithProperties tests data source retrieval of node properties
+func TestNodeDataSourceWithProperties(t *testing.T) {
+	p := getProviderData(testContainer)
+
+	type testData struct {
+		Name string
+		providerData
+	}
+
+	d := &testData{
+		Name:         "test-node-props",
+		providerData: *p,
+	}
+
+	executors := 2
+	remoteFs := "/var/jenkins"
+	description := "node with properties"
+	labels := "props-test"
+
+	// Create node with properties using V2 API
+	envVars := map[string]string{
+		"TEST_VAR": "test_value",
+		"PATH":     "/usr/bin",
+	}
+	toolLocs := map[string]string{
+		"hudson.plugins.git.GitTool$DescriptorImpl:Default": "/usr/bin/git",
+	}
+
+	n, err := testContainer.Jenkins.CreateNodeV2(context.Background(), d.Name,
+		gojenkins.WithNumExecutors(executors),
+		gojenkins.WithDescription(description),
+		gojenkins.WithRemoteFS(remoteFs),
+		gojenkins.WithLabel(labels),
+		gojenkins.WithLauncher(gojenkins.DefaultJNLPLauncher()),
+		gojenkins.WithNodeProperties(
+			gojenkins.NewEnvironmentVariablesNodeProperty(envVars),
+			gojenkins.NewToolLocationNodeProperty(toolLocs),
+			gojenkins.NewDiskSpaceMonitorNodeProperty("1GiB", "500MiB", "800MiB", "400MiB"),
+			gojenkins.NewDeferredWipeoutNodeProperty(),
+		),
+	)
+	require.NoError(t, err)
+	defer n.Delete(context.Background())
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, nodeDataSourceConfig, d),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testDataSourceName, "name", d.Name),
+					resource.TestCheckResourceAttr(testDataSourceName, "executors", strconv.Itoa(executors)),
+					resource.TestCheckResourceAttr(testDataSourceName, "description", description),
+					resource.TestCheckResourceAttr(testDataSourceName, "remote_fs", remoteFs),
+					resource.TestCheckResourceAttr(testDataSourceName, "environment_variables.TEST_VAR", "test_value"),
+					resource.TestCheckResourceAttr(testDataSourceName, "environment_variables.PATH", "/usr/bin"),
+					resource.TestCheckResourceAttr(testDataSourceName, "tool_locations.hudson.plugins.git.GitTool$DescriptorImpl:Default", "/usr/bin/git"),
+					resource.TestCheckResourceAttr(testDataSourceName, "free_disk_space_threshold", "1GiB"),
+					resource.TestCheckResourceAttr(testDataSourceName, "free_temp_space_threshold", "500MiB"),
+					resource.TestCheckResourceAttr(testDataSourceName, "free_disk_space_warning_threshold", "800MiB"),
+					resource.TestCheckResourceAttr(testDataSourceName, "free_temp_space_warning_threshold", "400MiB"),
+					resource.TestCheckResourceAttr(testDataSourceName, "disable_deferred_wipeout", "true"),
+				),
 			},
 		},
 	})

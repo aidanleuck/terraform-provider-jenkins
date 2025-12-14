@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 // The provider package implements a Jenkins provider for Terraform
 //
 // node_resource.go implements the node resource in Terraform using the gojenkins library.
@@ -76,13 +79,20 @@ func (l *LauncherConfiguration) MarshalLauncherConfiguration(ctx context.Context
 
 // NodeResourceModel describes the resource data model.
 type NodeResourceModel struct {
-	Name                  types.String `tfsdk:"name"`
-	NumExecutors          types.Int64  `tfsdk:"executors"`
-	Description           types.String `tfsdk:"description"`
-	RemoteFS              types.String `tfsdk:"remote_fs"`
-	Labels                types.List   `tfsdk:"labels"`
-	JNLPSecret            types.String `tfsdk:"jnlp_secret"`
-	LauncherConfiguration types.Object `tfsdk:"launcher_configuration"`
+	Name                         types.String `tfsdk:"name"`
+	NumExecutors                 types.Int64  `tfsdk:"executors"`
+	Description                  types.String `tfsdk:"description"`
+	RemoteFS                     types.String `tfsdk:"remote_fs"`
+	Labels                       types.List   `tfsdk:"labels"`
+	JNLPSecret                   types.String `tfsdk:"jnlp_secret"`
+	LauncherConfiguration        types.Object `tfsdk:"launcher_configuration"`
+	EnvironmentVariables         types.Map    `tfsdk:"environment_variables"`
+	ToolLocations                types.Map    `tfsdk:"tool_locations"`
+	FreeDiskSpaceThreshold       types.String `tfsdk:"free_disk_space_threshold"`
+	FreeTempSpaceThreshold       types.String `tfsdk:"free_temp_space_threshold"`
+	FreeDiskSpaceWarningThreshold types.String `tfsdk:"free_disk_space_warning_threshold"`
+	FreeTempSpaceWarningThreshold types.String `tfsdk:"free_temp_space_warning_threshold"`
+	DisableDeferredWipeout       types.Bool   `tfsdk:"disable_deferred_wipeout"`
 }
 
 // Metadata sets the name of the resource. Which is provider name + type + _node.
@@ -122,6 +132,36 @@ func (r *NodeResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				MarkdownDescription: "computed value that is set for jnlp nodes.",
 				Computed:            true,
 				Sensitive:           true,
+			},
+			"environment_variables": schema.MapAttribute{
+				MarkdownDescription: "Environment variables to set on the node. Map of variable names to values.",
+				ElementType:         types.StringType,
+				Optional:            true,
+			},
+			"tool_locations": schema.MapAttribute{
+				MarkdownDescription: "Tool locations on the node. Map keys should be in format 'tool_type:tool_name', e.g., 'hudson.plugins.git.GitTool$DescriptorImpl:Default'. Values are the paths to the tools.",
+				ElementType:         types.StringType,
+				Optional:            true,
+			},
+			"free_disk_space_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free disk space threshold for monitoring (e.g., '1GiB', '500MB'). Sets both disk and temp thresholds if free_temp_space_threshold is not specified.",
+				Optional:            true,
+			},
+			"free_temp_space_threshold": schema.StringAttribute{
+				MarkdownDescription: "Free temp space threshold for monitoring (e.g., '500MB'). If not specified, uses free_disk_space_threshold value.",
+				Optional:            true,
+			},
+			"free_disk_space_warning_threshold": schema.StringAttribute{
+				MarkdownDescription: "Warning threshold for free disk space (e.g., '800MB'). Optional.",
+				Optional:            true,
+			},
+			"free_temp_space_warning_threshold": schema.StringAttribute{
+				MarkdownDescription: "Warning threshold for free temp space (e.g., '400MB'). Optional.",
+				Optional:            true,
+			},
+			"disable_deferred_wipeout": schema.BoolAttribute{
+				MarkdownDescription: "Disables deferred workspace wipeout. Requires ws-cleanup plugin.",
+				Optional:            true,
 			},
 			"launcher_configuration": schema.SingleNestedAttribute{
 				MarkdownDescription: "Defines launcher options for the node.",
@@ -333,15 +373,37 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		executors = int(data.NumExecutors.ValueInt64())
 	}
 
-	// Create the node.
-	node, err := r.client.CreateNode(ctx,
-		data.Name.ValueString(),
-		executors,
-		data.Description.ValueString(),
-		data.RemoteFS.ValueString(),
-		labels,
-		jenkinsLauncher,
-	)
+	// Build node options using V2 API
+	options := []gojenkins.NodeOption{
+		gojenkins.WithNumExecutors(executors),
+		gojenkins.WithRemoteFS(data.RemoteFS.ValueString()),
+	}
+	
+	if !data.Description.IsNull() {
+		options = append(options, gojenkins.WithDescription(data.Description.ValueString()))
+	}
+	
+	if labels != "" {
+		options = append(options, gojenkins.WithLabel(labels))
+	}
+	
+	if jenkinsLauncher != nil {
+		options = append(options, gojenkins.WithLauncher(jenkinsLauncher))
+	}
+	
+	// Add node properties if provided
+	nodeProps, err := data.CreateNodeProperties(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to create node properties", err.Error())
+		return
+	}
+	
+	if len(nodeProps) > 0 {
+		options = append(options, gojenkins.WithNodeProperties(nodeProps...))
+	}
+
+	// Create the node using V2 API
+	node, err := r.client.CreateNodeV2(ctx, data.Name.ValueString(), options...)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to create node", err.Error())
 		return
@@ -380,6 +442,11 @@ func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins
 	r.RemoteFS = types.StringValue(nodeConfiguration.RemoteFS)
 
 	if err = r.mergeLauncherConfiguration(ctx, nodeConfiguration.Launcher.Launcher); err != nil {
+		return err
+	}
+	
+	// Merge node properties from Jenkins
+	if err = r.UpdateNodePropertiesFromJenkins(ctx, nodeConfiguration); err != nil {
 		return err
 	}
 
@@ -580,15 +647,37 @@ func (r *NodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		executors = int(data.NumExecutors.ValueInt64())
 	}
 
-	// Send a request to Jenkins to update the node
-	newNode, err := node.UpdateNode(ctx,
-		data.Name.ValueString(),
-		executors,
-		data.Description.ValueString(),
-		data.RemoteFS.ValueString(),
-		labels,
-		jenkinsLauncher,
-	)
+	// Build node options using V2 API
+	options := []gojenkins.NodeOption{
+		gojenkins.WithNumExecutors(executors),
+		gojenkins.WithRemoteFS(data.RemoteFS.ValueString()),
+	}
+	
+	if !data.Description.IsNull() {
+		options = append(options, gojenkins.WithDescription(data.Description.ValueString()))
+	}
+	
+	if labels != "" {
+		options = append(options, gojenkins.WithLabel(labels))
+	}
+	
+	if jenkinsLauncher != nil {
+		options = append(options, gojenkins.WithLauncher(jenkinsLauncher))
+	}
+	
+	// Add node properties if provided
+	nodeProps, err := data.CreateNodeProperties(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to create node properties", err.Error())
+		return
+	}
+	
+	if len(nodeProps) > 0 {
+		options = append(options, gojenkins.WithNodeProperties(nodeProps...))
+	}
+
+	// Send a request to Jenkins to update the node using V2 API
+	newNode, err := node.UpdateNodeV2(ctx, data.Name.ValueString(), options...)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to update node", err.Error())
 		return
