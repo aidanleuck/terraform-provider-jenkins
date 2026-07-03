@@ -190,6 +190,23 @@ func convertLabelList(ctx context.Context, labels string) (types.List, error) {
 	return labelsList, nil
 }
 
+// ConvertModeToJenkins converts the Terraform mode attribute (normal/exclusive) into a gojenkins.MODE.
+// Defaults to NORMAL if unset.
+func ConvertModeToJenkins(mode types.String) gojenkins.MODE {
+	if strings.EqualFold(mode.ValueString(), ExclusiveModeType) {
+		return gojenkins.EXCLUSIVE
+	}
+	return gojenkins.NORMAL
+}
+
+// ConvertModeFromJenkins converts a gojenkins.MODE into the lowercase Terraform mode attribute value.
+func ConvertModeFromJenkins(mode gojenkins.MODE) types.String {
+	if strings.EqualFold(string(mode), string(gojenkins.EXCLUSIVE)) {
+		return types.StringValue(ExclusiveModeType)
+	}
+	return types.StringValue(NormalModeType)
+}
+
 // GetJNLPSecretTF converts the JNLP secret to its underlying Terraform type.
 // If the agent is not a JNLP agent we set the value to null.
 func GetJNLPSecretTF(ctx context.Context, n *gojenkins.Node) (types.String, error) {
@@ -326,7 +343,7 @@ func GetLauncher(ctx context.Context, s *gojenkins.Slave) (*types.Object, error)
 // CreateNodeProperties converts Terraform node property configuration to gojenkins node properties
 func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenkins.NodeProperty, error) {
 	var properties []gojenkins.NodeProperty
-	
+
 	// Handle environment variables
 	if !n.EnvironmentVariables.IsNull() && !n.EnvironmentVariables.IsUnknown() {
 		envVars := make(map[string]string)
@@ -334,12 +351,12 @@ func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenki
 		if diags.HasError() {
 			return nil, errors.New("failed to convert environment variables")
 		}
-		
+
 		if len(envVars) > 0 {
 			properties = append(properties, gojenkins.NewEnvironmentVariablesNodeProperty(envVars))
 		}
 	}
-	
+
 	// Handle tool locations
 	if !n.ToolLocations.IsNull() && !n.ToolLocations.IsUnknown() {
 		toolLocs := make(map[string]string)
@@ -347,23 +364,23 @@ func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenki
 		if diags.HasError() {
 			return nil, errors.New("failed to convert tool locations")
 		}
-		
+
 		if len(toolLocs) > 0 {
 			properties = append(properties, gojenkins.NewToolLocationNodeProperty(toolLocs))
 		}
 	}
-	
+
 	// Handle disk space thresholds
 	if !n.FreeDiskSpaceThreshold.IsNull() && !n.FreeDiskSpaceThreshold.IsUnknown() {
 		freeDisk := n.FreeDiskSpaceThreshold.ValueString()
 		if freeDisk != "" {
 			var args []string
-			
+
 			// Add free temp threshold if specified, otherwise it will default to freeDisk
 			if !n.FreeTempSpaceThreshold.IsNull() && !n.FreeTempSpaceThreshold.IsUnknown() {
 				args = append(args, n.FreeTempSpaceThreshold.ValueString())
 			}
-			
+
 			// Add warning thresholds if specified
 			if !n.FreeDiskSpaceWarningThreshold.IsNull() && !n.FreeDiskSpaceWarningThreshold.IsUnknown() {
 				// Need to ensure we have temp threshold first
@@ -372,7 +389,7 @@ func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenki
 				}
 				args = append(args, n.FreeDiskSpaceWarningThreshold.ValueString())
 			}
-			
+
 			if !n.FreeTempSpaceWarningThreshold.IsNull() && !n.FreeTempSpaceWarningThreshold.IsUnknown() {
 				// Need to ensure we have both temp and disk warning first
 				for len(args) < 2 {
@@ -384,11 +401,11 @@ func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenki
 				}
 				args = append(args, n.FreeTempSpaceWarningThreshold.ValueString())
 			}
-			
+
 			properties = append(properties, gojenkins.NewDiskSpaceMonitorNodeProperty(freeDisk, args...))
 		}
 	}
-	
+
 	// Handle workspace cleanup (deferred wipeout)
 	// Only add the property if disable_deferred_wipeout is true
 	// The presence of the property means deferred wipeout is disabled
@@ -397,7 +414,7 @@ func (n *NodeResourceModel) CreateNodeProperties(ctx context.Context) ([]gojenki
 			properties = append(properties, gojenkins.NewDeferredWipeoutNodeProperty())
 		}
 	}
-	
+
 	return properties, nil
 }
 
@@ -413,13 +430,13 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 		n.DisableDeferredWipeout = types.BoolNull()
 		return nil
 	}
-	
+
 	// Extract properties from Jenkins config
 	envVars := make(map[string]string)
 	toolLocs := make(map[string]string)
 	var diskProp *gojenkins.DiskSpaceMonitorNodeProperty
 	var hasDeferredWipeout bool
-	
+
 	for _, prop := range nodeConfig.NodeProperties.Properties {
 		switch p := prop.(type) {
 		case *gojenkins.EnvironmentVariablesNodeProperty:
@@ -437,7 +454,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			hasDeferredWipeout = true
 		}
 	}
-	
+
 	// Update environment variables only if user configured them
 	if !n.EnvironmentVariables.IsNull() {
 		if len(envVars) > 0 {
@@ -450,7 +467,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.EnvironmentVariables = types.MapNull(types.StringType)
 		}
 	}
-	
+
 	// Update tool locations only if user configured them
 	if !n.ToolLocations.IsNull() {
 		if len(toolLocs) > 0 {
@@ -463,7 +480,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.ToolLocations = types.MapNull(types.StringType)
 		}
 	}
-	
+
 	// Update disk thresholds only if user configured them
 	if !n.FreeDiskSpaceThreshold.IsNull() {
 		if diskProp != nil && diskProp.FreeDiskSpaceThreshold != "" {
@@ -472,7 +489,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.FreeDiskSpaceThreshold = types.StringNull()
 		}
 	}
-	
+
 	if !n.FreeTempSpaceThreshold.IsNull() {
 		if diskProp != nil && diskProp.FreeTempSpaceThreshold != "" {
 			n.FreeTempSpaceThreshold = types.StringValue(diskProp.FreeTempSpaceThreshold)
@@ -480,7 +497,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.FreeTempSpaceThreshold = types.StringNull()
 		}
 	}
-	
+
 	if !n.FreeDiskSpaceWarningThreshold.IsNull() {
 		if diskProp != nil && diskProp.FreeDiskSpaceWarningThreshold != "" {
 			n.FreeDiskSpaceWarningThreshold = types.StringValue(diskProp.FreeDiskSpaceWarningThreshold)
@@ -488,7 +505,7 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.FreeDiskSpaceWarningThreshold = types.StringNull()
 		}
 	}
-	
+
 	if !n.FreeTempSpaceWarningThreshold.IsNull() {
 		if diskProp != nil && diskProp.FreeTempSpaceWarningThreshold != "" {
 			n.FreeTempSpaceWarningThreshold = types.StringValue(diskProp.FreeTempSpaceWarningThreshold)
@@ -496,11 +513,11 @@ func (n *NodeResourceModel) UpdateNodePropertiesFromJenkins(ctx context.Context,
 			n.FreeTempSpaceWarningThreshold = types.StringNull()
 		}
 	}
-	
+
 	// Update workspace cleanup only if user configured it
 	if !n.DisableDeferredWipeout.IsNull() {
 		n.DisableDeferredWipeout = types.BoolValue(hasDeferredWipeout)
 	}
-	
+
 	return nil
 }
