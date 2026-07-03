@@ -1461,7 +1461,7 @@ func verifyNodeWorkspaceCleanup(nodeName string) resource.TestCheckFunc {
 }
 
 // TestNodeMode tests that a node's usage mode can be set to normal/exclusive
-// (case insensitively) and defaults to normal when omitted.
+// and defaults to normal when omitted.
 func TestNodeMode(t *testing.T) {
 	resourceConfig := `
 resource "jenkins_node" "test" {
@@ -1721,4 +1721,118 @@ func compareNodeMode(expectedMode string) resource.TestCheckFunc {
 
 		return nil
 	}
+}
+
+// TestNodeModeIdempotent verifies that re-applying an unchanged configuration
+// produces an empty plan. terraform-plugin-testing already enforces this after
+// every non-PlanOnly step, but this test makes the guarantee explicit for mode
+// specifically: a node with mode set (either normal or exclusive) should never
+// show a pending change when nothing in the config has changed.
+func TestNodeModeIdempotent(t *testing.T) {
+	pd := getProviderData(testContainer)
+
+	tcs := []struct {
+		TestName string
+		Name     string
+		Mode     string
+	}{
+		{TestName: "normal", Name: "mode_idempotent_normal_node", Mode: "normal"},
+		{TestName: "exclusive", Name: "mode_idempotent_exclusive_node", Mode: "exclusive"},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.TestName, func(t *testing.T) {
+			resourceConfig := fmt.Sprintf(`
+resource "jenkins_node" "test" {
+	name = "%s"
+	executors = 1
+	description = "mode idempotent test"
+	remote_fs = "/tmp"
+	labels = ["mode-idempotent"]
+	mode = "%s"
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}
+`, tc.Name, tc.Mode)
+
+			testConfig := templateConfig(t, providerConfig+"\n"+resourceConfig, pd)
+
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config: testConfig,
+						Check: resource.ComposeTestCheckFunc(
+							resource.TestCheckResourceAttr(testNodeResourceName, "mode", tc.Mode),
+							compareNodeMode(tc.Mode),
+						),
+					},
+					// Re-plan with an identical configuration. Nothing changed,
+					// so this must produce an empty plan (no update triggered).
+					{
+						Config:   testConfig,
+						PlanOnly: true,
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestNodeModeUnaffectedByUnrelatedUpdate reproduces the reported regression where
+// updating an unrelated attribute (executors) on an apply would silently reset the
+// node's mode back to normal, because every update request sent the hardcoded
+// NORMAL mode to Jenkins regardless of configuration. It verifies that changing
+// executors while mode stays configured as exclusive leaves mode untouched, both
+// in Terraform state and in the actual Jenkins node configuration.
+func TestNodeModeUnaffectedByUnrelatedUpdate(t *testing.T) {
+	name := "mode_unrelated_update_node"
+
+	buildConfig := func(executors int) string {
+		return providerConfig + fmt.Sprintf(`
+resource "jenkins_node" "test" {
+	name = "%s"
+	executors = %d
+	description = "mode unrelated update test"
+	remote_fs = "/tmp"
+	labels = ["mode-unrelated"]
+	mode = "exclusive"
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}
+`, name, executors)
+	}
+
+	pd := getProviderData(testContainer)
+	type testData struct {
+		providerData
+	}
+	td := testData{providerData: *pd}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, buildConfig(1), td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "executors", "1"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "exclusive"),
+					compareNodeMode("exclusive"),
+				),
+			},
+			// Only executors changes here; mode stays "exclusive" in config.
+			// Before the fix this update would have silently forced mode back
+			// to NORMAL in Jenkins.
+			{
+				Config: templateConfig(t, buildConfig(3), td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "executors", "3"),
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "exclusive"),
+					compareNodeMode("exclusive"),
+				),
+			},
+		},
+	})
 }
