@@ -32,6 +32,7 @@ Creates a Jenkins Node.
 - `jnlp_secret` (String, Sensitive) JNLP secret for agent connection
 - `labels` (List of String) Labels assigned to the node
 - `launcher_configuration` (Object) Launcher configuration for the node (see [below for nested schema](#nestedatt--launcher_configuration))
+- `mode` (String) Usage mode of the node. Either `normal` or `exclusive`.
 - `remote_fs` (String) Where agent will store info
 - `tool_locations` (Map of String) Tool locations configured on the node
 

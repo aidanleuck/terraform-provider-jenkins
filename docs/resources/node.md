@@ -32,6 +32,7 @@ Creates a Jenkins Node.
 - `free_temp_space_threshold` (String) Free temp space threshold for monitoring (e.g., '500MB'). If not specified, uses free_disk_space_threshold value.
 - `free_temp_space_warning_threshold` (String) Warning threshold for free temp space (e.g., '400MB'). Optional.
 - `labels` (List of String) labels to apply to the Jenkins node.
+- `mode` (String) Usage mode of the node. `normal` allows the node to build any job ("Use this node as much as possible"). `exclusive` restricts it to jobs whose label expressions match the node ("Only build jobs with label expressions matching this node"). Defaults to `normal`.
 - `tool_locations` (Map of String) Tool locations on the node. Map keys should be in format 'tool_type:tool_name', e.g., 'hudson.plugins.git.GitTool$DescriptorImpl:Default'. Values are the paths to the tools.
 
 ### Read-Only
