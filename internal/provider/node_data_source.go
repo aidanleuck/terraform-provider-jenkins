@@ -43,6 +43,7 @@ type NodeDataSourceModel struct {
 	FreeDiskSpaceWarningThreshold types.String `tfsdk:"free_disk_space_warning_threshold"`
 	FreeTempSpaceWarningThreshold types.String `tfsdk:"free_temp_space_warning_threshold"`
 	DisableDeferredWipeout        types.Bool   `tfsdk:"disable_deferred_wipeout"`
+	Mode                          types.String `tfsdk:"mode"`
 }
 
 // Metadata exports the name of the data source with is provider + type + _node.
@@ -146,6 +147,10 @@ func (d *NodeDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				MarkdownDescription: "Whether deferred wipeout is disabled",
 				Computed:            true,
 			},
+			"mode": schema.StringAttribute{
+				MarkdownDescription: "Usage mode of the node. Either `normal` or `exclusive`.",
+				Computed:            true,
+			},
 		},
 	}
 }
@@ -198,6 +203,7 @@ func (d *NodeDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.Labels = labelsList
 	data.Name = types.StringValue(node.GetName())
 	data.RemoteFS = types.StringValue(slaveConfig.RemoteFS)
+	data.Mode = ConvertModeFromJenkins(slaveConfig.Mode)
 
 	// Parse custom launcher information specific to the launcher plugin (SSH or JNLP configuration)
 	launcher, err := GetLauncher(ctx, slaveConfig)

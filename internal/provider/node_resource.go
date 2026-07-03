@@ -13,10 +13,13 @@ import (
 	"strings"
 
 	"github.com/aidanleuck/gojenkins"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -28,6 +31,9 @@ var _ resource.ResourceWithImportState = &NodeResource{}
 const (
 	JNLPLauncherType string = "jnlp"
 	SSHLauncherType  string = "ssh"
+
+	NormalModeType    string = "normal"
+	ExclusiveModeType string = "exclusive"
 )
 
 // NewNodeResource returns a Node Resource struct.
@@ -79,20 +85,21 @@ func (l *LauncherConfiguration) MarshalLauncherConfiguration(ctx context.Context
 
 // NodeResourceModel describes the resource data model.
 type NodeResourceModel struct {
-	Name                         types.String `tfsdk:"name"`
-	NumExecutors                 types.Int64  `tfsdk:"executors"`
-	Description                  types.String `tfsdk:"description"`
-	RemoteFS                     types.String `tfsdk:"remote_fs"`
-	Labels                       types.List   `tfsdk:"labels"`
-	JNLPSecret                   types.String `tfsdk:"jnlp_secret"`
-	LauncherConfiguration        types.Object `tfsdk:"launcher_configuration"`
-	EnvironmentVariables         types.Map    `tfsdk:"environment_variables"`
-	ToolLocations                types.Map    `tfsdk:"tool_locations"`
-	FreeDiskSpaceThreshold       types.String `tfsdk:"free_disk_space_threshold"`
-	FreeTempSpaceThreshold       types.String `tfsdk:"free_temp_space_threshold"`
+	Name                          types.String `tfsdk:"name"`
+	NumExecutors                  types.Int64  `tfsdk:"executors"`
+	Description                   types.String `tfsdk:"description"`
+	RemoteFS                      types.String `tfsdk:"remote_fs"`
+	Labels                        types.List   `tfsdk:"labels"`
+	JNLPSecret                    types.String `tfsdk:"jnlp_secret"`
+	LauncherConfiguration         types.Object `tfsdk:"launcher_configuration"`
+	EnvironmentVariables          types.Map    `tfsdk:"environment_variables"`
+	ToolLocations                 types.Map    `tfsdk:"tool_locations"`
+	FreeDiskSpaceThreshold        types.String `tfsdk:"free_disk_space_threshold"`
+	FreeTempSpaceThreshold        types.String `tfsdk:"free_temp_space_threshold"`
 	FreeDiskSpaceWarningThreshold types.String `tfsdk:"free_disk_space_warning_threshold"`
 	FreeTempSpaceWarningThreshold types.String `tfsdk:"free_temp_space_warning_threshold"`
-	DisableDeferredWipeout       types.Bool   `tfsdk:"disable_deferred_wipeout"`
+	DisableDeferredWipeout        types.Bool   `tfsdk:"disable_deferred_wipeout"`
+	Mode                          types.String `tfsdk:"mode"`
 }
 
 // Metadata sets the name of the resource. Which is provider name + type + _node.
@@ -162,6 +169,15 @@ func (r *NodeResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 			"disable_deferred_wipeout": schema.BoolAttribute{
 				MarkdownDescription: "Disables deferred workspace wipeout. Requires ws-cleanup plugin.",
 				Optional:            true,
+			},
+			"mode": schema.StringAttribute{
+				MarkdownDescription: "Usage mode of the node. `normal` allows the node to build any job (\"Use this node as much as possible\"). `exclusive` restricts it to jobs whose label expressions match the node (\"Only build jobs with label expressions matching this node\"). Defaults to `normal`.",
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString(NormalModeType),
+				Validators: []validator.String{
+					stringvalidator.OneOf(NormalModeType, ExclusiveModeType),
+				},
 			},
 			"launcher_configuration": schema.SingleNestedAttribute{
 				MarkdownDescription: "Defines launcher options for the node.",
@@ -377,27 +393,28 @@ func (r *NodeResource) Create(ctx context.Context, req resource.CreateRequest, r
 	options := []gojenkins.NodeOption{
 		gojenkins.WithNumExecutors(executors),
 		gojenkins.WithRemoteFS(data.RemoteFS.ValueString()),
+		gojenkins.WithMode(ConvertModeToJenkins(data.Mode)),
 	}
-	
+
 	if !data.Description.IsNull() {
 		options = append(options, gojenkins.WithDescription(data.Description.ValueString()))
 	}
-	
+
 	if labels != "" {
 		options = append(options, gojenkins.WithLabel(labels))
 	}
-	
+
 	if jenkinsLauncher != nil {
 		options = append(options, gojenkins.WithLauncher(jenkinsLauncher))
 	}
-	
+
 	// Add node properties if provided
 	nodeProps, err := data.CreateNodeProperties(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to create node properties", err.Error())
 		return
 	}
-	
+
 	if len(nodeProps) > 0 {
 		options = append(options, gojenkins.WithNodeProperties(nodeProps...))
 	}
@@ -440,11 +457,12 @@ func (r *NodeResourceModel) MergeConfiguration(ctx context.Context, n *gojenkins
 
 	r.Name = types.StringValue(nodeConfiguration.Name)
 	r.RemoteFS = types.StringValue(nodeConfiguration.RemoteFS)
+	r.Mode = ConvertModeFromJenkins(nodeConfiguration.Mode)
 
 	if err = r.mergeLauncherConfiguration(ctx, nodeConfiguration.Launcher.Launcher); err != nil {
 		return err
 	}
-	
+
 	// Merge node properties from Jenkins
 	if err = r.UpdateNodePropertiesFromJenkins(ctx, nodeConfiguration); err != nil {
 		return err
@@ -651,27 +669,28 @@ func (r *NodeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	options := []gojenkins.NodeOption{
 		gojenkins.WithNumExecutors(executors),
 		gojenkins.WithRemoteFS(data.RemoteFS.ValueString()),
+		gojenkins.WithMode(ConvertModeToJenkins(data.Mode)),
 	}
-	
+
 	if !data.Description.IsNull() {
 		options = append(options, gojenkins.WithDescription(data.Description.ValueString()))
 	}
-	
+
 	if labels != "" {
 		options = append(options, gojenkins.WithLabel(labels))
 	}
-	
+
 	if jenkinsLauncher != nil {
 		options = append(options, gojenkins.WithLauncher(jenkinsLauncher))
 	}
-	
+
 	// Add node properties if provided
 	nodeProps, err := data.CreateNodeProperties(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to create node properties", err.Error())
 		return
 	}
-	
+
 	if len(nodeProps) > 0 {
 		options = append(options, gojenkins.WithNodeProperties(nodeProps...))
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/aidanleuck/gojenkins"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/stretchr/testify/require"
 )
 
 const providerConfig = `
@@ -1453,6 +1454,269 @@ func verifyNodeWorkspaceCleanup(nodeName string) resource.TestCheckFunc {
 
 		if workspaceProp == nil {
 			return fmt.Errorf("no workspace cleanup property found")
+		}
+
+		return nil
+	}
+}
+
+// TestNodeMode tests that a node's usage mode can be set to normal/exclusive
+// (case insensitively) and defaults to normal when omitted.
+func TestNodeMode(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "{{ .Name }}"
+	executors = 1
+	description = "{{ .Name }}"
+	remote_fs = "/tmp"
+	labels = ["{{ .Name }}"]
+	{{ if .Mode }}mode = "{{ .Mode }}"{{ end }}
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}
+	`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	type testData struct {
+		providerData
+		TestName     string
+		Name         string
+		Mode         string
+		ExpectedMode string
+	}
+
+	tcs := []testData{
+		{
+			providerData: *pd,
+			TestName:     "mode_default",
+			Name:         "mode_default_node",
+			Mode:         "",
+			ExpectedMode: "normal",
+		},
+		{
+			providerData: *pd,
+			TestName:     "mode_normal_explicit",
+			Name:         "mode_normal_node",
+			Mode:         "normal",
+			ExpectedMode: "normal",
+		},
+		{
+			providerData: *pd,
+			TestName:     "mode_exclusive",
+			Name:         "mode_exclusive_node",
+			Mode:         "exclusive",
+			ExpectedMode: "exclusive",
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.TestName, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config: templateConfig(t, mergedConfig, tc),
+						Check: resource.ComposeTestCheckFunc(
+							resource.TestCheckResourceAttr(testNodeResourceName, "mode", tc.ExpectedMode),
+							compareNodeMode(tc.ExpectedMode),
+						),
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestNodeModeUpdate tests that a node's usage mode can be changed after creation,
+// transitioning normal -> exclusive -> normal.
+func TestNodeModeUpdate(t *testing.T) {
+	name := "mode_update_node"
+
+	buildConfig := func(mode string) string {
+		return providerConfig + fmt.Sprintf(`
+resource "jenkins_node" "test" {
+	name = "%s"
+	executors = 1
+	description = "mode update test"
+	remote_fs = "/tmp"
+	labels = ["mode-update"]
+	mode = "%s"
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}
+`, name, mode)
+	}
+
+	pd := getProviderData(testContainer)
+	type testData struct {
+		providerData
+	}
+	td := testData{providerData: *pd}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, buildConfig("normal"), td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "normal"),
+					compareNodeMode("normal"),
+				),
+			},
+			{
+				Config: templateConfig(t, buildConfig("exclusive"), td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "exclusive"),
+					compareNodeMode("exclusive"),
+				),
+			},
+			{
+				Config: templateConfig(t, buildConfig("normal"), td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "normal"),
+					compareNodeMode("normal"),
+				),
+			},
+		},
+	})
+}
+
+// TestNodeModeInvalid tests that an unsupported mode value is rejected at plan time.
+// This includes values that are semantically valid but the wrong case ("EXCLUSIVE"),
+// since mode is not case-normalized and must match "normal"/"exclusive" exactly to
+// avoid state drifting to lowercase on the next refresh.
+func TestNodeModeInvalid(t *testing.T) {
+	resourceConfig := `
+resource "jenkins_node" "test" {
+	name = "invalid_mode_node"
+	executors = 1
+	description = "invalid mode test"
+	remote_fs = "/tmp"
+	labels = ["invalid-mode"]
+	mode = "{{ .Mode }}"
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}`
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+
+	type testData struct {
+		providerData
+		TestName string
+		Mode     string
+	}
+
+	tcs := []testData{
+		{providerData: *pd, TestName: "bogus_value", Mode: "bogus"},
+		{providerData: *pd, TestName: "wrong_case", Mode: "EXCLUSIVE"},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.TestName, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config:      templateConfig(t, mergedConfig, tc),
+						ExpectError: regexp.MustCompile(`(?i)value must be one of`),
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestNodeModeDriftDetection verifies that when a node's mode is changed out-of-band
+// in Jenkins (e.g. by hand in the UI), Terraform detects the drift on the next plan
+// and corrects it back to the configured value on apply.
+func TestNodeModeDriftDetection(t *testing.T) {
+	name := "mode_drift_node"
+	resourceConfig := fmt.Sprintf(`
+resource "jenkins_node" "test" {
+	name = "%s"
+	executors = 1
+	description = "mode drift test"
+	remote_fs = "/tmp"
+	labels = ["mode-drift"]
+	mode = "normal"
+	launcher_configuration = {
+		type = "jnlp"
+    }
+}
+`, name)
+
+	mergedConfig := providerConfig + "\n" + resourceConfig
+	pd := getProviderData(testContainer)
+	type testData struct {
+		providerData
+	}
+	td := testData{providerData: *pd}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: templateConfig(t, mergedConfig, td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "normal"),
+					compareNodeMode("normal"),
+				),
+			},
+			// Simulate someone flipping the node to "Only build jobs with label
+			// expressions matching this node" by hand in the Jenkins UI, outside
+			// of Terraform.
+			{
+				PreConfig: func() {
+					node, err := testContainer.Jenkins.GetNode(context.Background(), name)
+					require.NoError(t, err)
+					_, err = node.UpdateNodeV2(context.Background(), name,
+						gojenkins.WithNumExecutors(1),
+						gojenkins.WithRemoteFS("/tmp"),
+						gojenkins.WithLabel("mode-drift"),
+						gojenkins.WithMode(gojenkins.EXCLUSIVE),
+					)
+					require.NoError(t, err)
+				},
+				Config:             templateConfig(t, mergedConfig, td),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Applying the original config should correct the drift back to normal.
+			{
+				Config: templateConfig(t, mergedConfig, td),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testNodeResourceName, "mode", "normal"),
+					compareNodeMode("normal"),
+				),
+			},
+		},
+	})
+}
+
+// compareNodeMode verifies the node's usage mode in Jenkins matches the expected
+// lowercase mode value (normal/exclusive).
+func compareNodeMode(expectedMode string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		nodeName := s.RootModule().Resources[testNodeResourceName].Primary.Attributes["name"]
+		node, err := testContainer.Jenkins.GetNode(context.Background(), nodeName)
+		if err != nil {
+			return err
+		}
+
+		config, err := node.GetSlaveConfig(context.Background())
+		if err != nil {
+			return err
+		}
+
+		actualMode := strings.ToLower(string(config.Mode))
+		if actualMode != expectedMode {
+			return fmt.Errorf("node mode mismatch: expected %s, got %s", expectedMode, actualMode)
 		}
 
 		return nil
