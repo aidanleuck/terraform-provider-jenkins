@@ -191,12 +191,14 @@ func (p *JenkinsProvider) Configure(ctx context.Context, req provider.ConfigureR
 func (p *JenkinsProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewNodeResource,
+		NewFolderResource,
 	}
 }
 
 func (p *JenkinsProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewNodeDataSource,
+		NewFolderDataSource,
 	}
 }
 
