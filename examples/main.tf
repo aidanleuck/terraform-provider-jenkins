@@ -30,3 +30,22 @@ resource "jenkins_node" "test" {
     type = "jnlp"
   }
 }
+
+resource "jenkins_folder" "team" {
+  name        = "team-a"
+  description = "Jobs owned by team A"
+}
+
+// Nested folder, created at team-a/services
+resource "jenkins_folder" "services" {
+  name        = "services"
+  parent      = jenkins_folder.team.id
+  description = "Service pipelines"
+}
+
+data "jenkins_folder" "services" {
+  name   = "services"
+  parent = "team-a"
+
+  depends_on = [jenkins_folder.services]
+}
