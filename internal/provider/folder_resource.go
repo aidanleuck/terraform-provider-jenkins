@@ -137,24 +137,29 @@ func (r *FolderResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	id := buildFolderID(parent, name)
+
+	// gojenkins discards the poll error when creating, so poll explicitly to
+	// make sure the folder data (notably the URL) is populated.
+	if _, err := folder.Poll(ctx); err != nil {
+		resp.Diagnostics.AddError(fmt.Sprintf("failed to retrieve created jenkins folder %s", id), err.Error())
+		return
+	}
+
+	data.ID = types.StringValue(id)
+	data.URL = types.StringValue(folder.Raw.URL)
+
 	if !data.Description.IsNull() && data.Description.ValueString() != "" {
 		if err := setFolderDescription(ctx, r.client, folder, data.Description.ValueString()); err != nil {
-			resp.Diagnostics.AddError(fmt.Sprintf("failed to set description of jenkins folder %s", buildFolderID(parent, name)), err.Error())
-			// Persist the folder so Terraform tracks it and can retry or destroy it.
-			data.ID = types.StringValue(buildFolderID(parent, name))
-			data.URL = types.StringValue(folder.Raw.URL)
+			resp.Diagnostics.AddError(fmt.Sprintf("failed to set description of jenkins folder %s", id), err.Error())
+			// The folder exists, so save it to state. Because the diagnostics
+			// contain an error, Terraform marks the resource as tainted and
+			// replaces it on the next apply, which retries the description.
 			data.Description = types.StringNull()
 			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 			return
 		}
-		if _, err := folder.Poll(ctx); err != nil {
-			resp.Diagnostics.AddError("failed to refresh jenkins folder", err.Error())
-			return
-		}
 	}
-
-	data.ID = types.StringValue(buildFolderID(parent, name))
-	data.URL = types.StringValue(folder.Raw.URL)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -182,7 +187,9 @@ func (r *FolderResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 	data.ID = types.StringValue(id)
 	data.URL = types.StringValue(folder.Raw.URL)
-	// Keep a null description when none is configured to avoid a perpetual diff.
+	// Remote changes to the description are intentionally surfaced as drift, so the
+	// remote value always wins here. Keep a null description only when neither
+	// side has one to avoid a perpetual diff.
 	if folder.Raw.Description != "" || !data.Description.IsNull() {
 		data.Description = types.StringValue(folder.Raw.Description)
 	}

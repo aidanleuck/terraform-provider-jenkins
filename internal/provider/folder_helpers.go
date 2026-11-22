@@ -12,6 +12,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -24,8 +25,9 @@ var (
 	// folderPathRegex matches a slash separated path without leading or trailing slashes.
 	folderPathRegex = regexp.MustCompile(`^[^/]+(/[^/]+)*$`)
 
-	descriptionElementRegex = regexp.MustCompile(`(?s)<description>.*?</description>|<description\s*/>`)
-	rootElementRegex        = regexp.MustCompile(`<[A-Za-z][^>]*>`)
+	// xmlDeclarationRegex matches a leading XML declaration. Jenkins writes version 1.1,
+	// which encoding/xml rejects, so the declaration is skipped before parsing.
+	xmlDeclarationRegex = regexp.MustCompile(`^\s*<\?xml[^>]*\?>`)
 )
 
 // splitFolderPath splits a slash separated folder path into its segments.
@@ -91,8 +93,10 @@ func setFolderDescription(ctx context.Context, client *gojenkins.Jenkins, folder
 	return nil
 }
 
-// replaceDescription sets the description element of a folder config.xml,
-// adding it as the first child of the root element if it is not present.
+// replaceDescription sets the description of a folder config.xml. Only the
+// `description` element that is a direct child of the root element is
+// replaced, so descriptions of nested elements are left untouched. If the root
+// has no description it is added as the first child of the root element.
 func replaceDescription(config, description string) (string, error) {
 	var escaped bytes.Buffer
 	if err := xml.EscapeText(&escaped, []byte(description)); err != nil {
@@ -100,17 +104,52 @@ func replaceDescription(config, description string) (string, error) {
 	}
 	element := "<description>" + escaped.String() + "</description>"
 
-	if loc := descriptionElementRegex.FindStringIndex(config); loc != nil {
-		return config[:loc[0]] + element + config[loc[1]:], nil
+	base := 0
+	if loc := xmlDeclarationRegex.FindStringIndex(config); loc != nil {
+		base = loc[1]
+	}
+	decoder := xml.NewDecoder(strings.NewReader(config[base:]))
+	depth := 0
+	insertAt := -1
+	descStart, descEnd := -1, -1
+
+	for {
+		before := base + int(decoder.InputOffset())
+		tok, err := decoder.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("failed parsing folder config: %w", err)
+		}
+		after := base + int(decoder.InputOffset())
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			if depth == 1 {
+				// A self closing root has no children to insert into.
+				if strings.HasSuffix(config[before:after], "/>") {
+					return "", errors.New("unexpected self closing root element in folder config")
+				}
+				insertAt = after
+			}
+			if depth == 2 && t.Name.Local == "description" && descStart < 0 {
+				descStart = before
+			}
+		case xml.EndElement:
+			if depth == 2 && t.Name.Local == "description" && descStart >= 0 && descEnd < 0 {
+				descEnd = after
+			}
+			depth--
+		}
 	}
 
-	loc := rootElementRegex.FindStringIndex(config)
-	if loc == nil {
+	if descStart >= 0 && descEnd >= 0 {
+		return config[:descStart] + element + config[descEnd:], nil
+	}
+	if insertAt < 0 {
 		return "", errors.New("unable to find root element in folder config")
 	}
-	// A self closing root element has no children to insert into.
-	if strings.HasSuffix(config[loc[0]:loc[1]], "/>") {
-		return "", errors.New("unexpected self closing root element in folder config")
-	}
-	return config[:loc[1]] + element + config[loc[1]:], nil
+	return config[:insertAt] + element + config[insertAt:], nil
 }

@@ -74,6 +74,14 @@ resource "jenkins_folder" "test" {
 					resource.TestCheckResourceAttr(testFolderResourceName, "description", "second"),
 				),
 			},
+			// Drift: the description is changed outside of Terraform and is restored.
+			{
+				PreConfig: driftFolderDescription(t, "", "basic-folder", "drifted"),
+				Config:    config("second"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(testFolderResourceName, "description", "second"),
+				),
+			},
 			// Import by path.
 			{
 				ResourceName:      testFolderResourceName,
@@ -102,6 +110,14 @@ resource "jenkins_folder" "test" {
 				Config: config,
 				Check: resource.ComposeTestCheckFunc(
 					checkFolderExists("", "no-description-folder", true),
+					resource.TestCheckNoResourceAttr(testFolderResourceName, "description"),
+				),
+			},
+			// Drift: a description added outside of Terraform is removed again.
+			{
+				PreConfig: driftFolderDescription(t, "", "no-description-folder", "drifted"),
+				Config:    config,
+				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckNoResourceAttr(testFolderResourceName, "description"),
 				),
 			},
@@ -233,4 +249,18 @@ data "jenkins_folder" "test_data" {
 			},
 		},
 	})
+}
+
+// driftFolderDescription changes the description directly in Jenkins to simulate drift.
+func driftFolderDescription(t *testing.T, parent, name, description string) func() {
+	return func() {
+		ctx := context.Background()
+		folder, found, err := getFolder(ctx, testContainer.Jenkins, parent, name)
+		if err != nil || !found {
+			t.Fatalf("failed to find folder %s: found=%t err=%v", buildFolderID(parent, name), found, err)
+		}
+		if err := setFolderDescription(ctx, testContainer.Jenkins, folder, description); err != nil {
+			t.Fatalf("failed to drift folder description: %v", err)
+		}
+	}
 }
